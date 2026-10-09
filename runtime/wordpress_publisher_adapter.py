@@ -471,6 +471,7 @@ class ScopedPublisherAdapter:
         browser = getattr(self.public_verifier.browser_verifier, "__self__", None)
         binding = getattr(browser, "runtime_binding", None)
         return (getattr(browser, "executes_live_browser", False) is True
+                and getattr(browser, "test_mode", False) is False
                 and bool(getattr(browser, "chromium", None))
                 and isinstance(binding, dict)
                 and binding.get("site_url") == self.transport.site_url

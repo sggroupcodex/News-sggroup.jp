@@ -159,6 +159,25 @@ class PublisherContractTests(unittest.TestCase):
         self.assertEqual(failure.exception.code, "actual_live_publication_verifier_unavailable")
         self.assertFalse(any(method == "POST" for method, _, _ in client.calls))
 
+    def test_synthetic_browser_cannot_enable_production_publication_even_with_matching_binding(self):
+        from runtime.publish import LiveBrowserVerifier
+        client = FakeTransport()
+        browser = LiveBrowserVerifier(client.site_url, 5, "/unused-private-fixture-path",
+                                      chromium="/fixture-chromium", test_mode=True)
+        adapter = ScopedPublisherAdapter(client, expected_user_id=5, connection_revision="fixture-spec",
+            expected_implementation_sha256=FIXTURE["status"]["implementation_sha256"],
+            public_verifier=PublicPageVerifier(client.site_url, browser.public),
+            saved_preview_verifier=browser.saved_preview)
+        browser.runtime_binding = adapter.runtime_binding("fixture-runtime")
+        adapter.authorize_publication(stage_ids={"ja": 60001, "en": 60002},
+                                      audit_sha256=FIXTURE["audit_sha256"], bundle_digest=FIXTURE["bundle_digest"])
+        self.assertFalse(browser.executes_live_browser)
+        self.assertFalse(adapter.publication_verification_available)
+        with self.assertRaises(WordPressError) as failure:
+            adapter.publish_post(60001, FIXTURE["operation_key"])
+        self.assertEqual(failure.exception.code, "actual_live_publication_verifier_unavailable")
+        self.assertFalse(any(method == "POST" for method, _, _ in client.calls))
+
     def test_publish_binds_actual_source_and_peer_and_actual_audit_digest(self):
         client, adapter = self.adapter()
         adapter.authorize_publication(stage_ids={"ja": 60001, "en": 60002},

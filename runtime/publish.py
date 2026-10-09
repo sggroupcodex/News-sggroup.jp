@@ -129,6 +129,7 @@ class LiveBrowserVerifier:
         self.output = Path(output).resolve()
         self.preview_loader = preview_loader
         self.test_mode = test_mode
+        self.executes_live_browser = not test_mode
         self.chromium = chromium or shutil.which("chromium")
         self.runtime_binding = None
 
