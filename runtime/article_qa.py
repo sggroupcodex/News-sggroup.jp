@@ -358,13 +358,16 @@ def _audit_language(language: str, entry: dict):
     section_keys = _keys(sections, "data-sgn-section")
     if not sections or len(section_keys) != len(set(section_keys)) or any(not k for k in section_keys):
         errors.append("section_keys: unique nonempty ordered bilingual main keys required")
-    h2_main = [n for n in (main.walk() if main else []) if n.tag == "h2"]
     if roles["toc"]:
-        toc_links = [n for n in roles["toc"][0].walk() if n.tag == "a"]
-        expected_toc = [n.attrs.get("id") for n in h2_main]
+        toc_node = roles["toc"][0]
+        toc_links = [n for n in toc_node.walk() if n.tag == "a"]
+        # The original brief requires actual H2s, including FAQ, reference and
+        # link-panel headings outside main. Only the TOC's own title is excluded.
+        h2_article = [n for n in article_nodes if n.tag == "h2" and toc_node not in n.ancestors()]
+        expected_toc = [n.attrs.get("id") for n in h2_article]
         actual_toc = [unquote((n.attrs.get("href") or "")[1:]) for n in toc_links]
         if actual_toc != expected_toc or any(not i for i in expected_toc):
-            errors.append("toc: ordered TOC must match every main H2 anchor")
+            errors.append("toc: ordered TOC must match every article H2 anchor except its own title")
         for link in toc_links:
             target = id_map.get(unquote((link.attrs.get("href") or "")[1:]))
             if target and link.text().strip() != target.text().strip():

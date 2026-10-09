@@ -41,7 +41,8 @@ def synthetic_bundle():
                 body += f'<aside data-sgn-role="{role}" data-sgn-rail="reading"><p>制度の背景</p></aside>'
             sections.append(body + '</section>')
         faq = ''.join(f'<details data-sgn-faq="question-{i}"><summary>Question {i}</summary><p>条件により経路は変わる。</p></details>' for i in range(6))
-        html = f'''<style>{css}</style><article id="{root}" lang="{lang}"><header data-sgn-role="hero"><div data-sgn-role="hero-frame" data-sgn-rail="reading"><div data-sgn-role="hero-labels">NEWS &amp; CONTEXT</div><h1>{title}</h1><p data-sgn-role="deck">市場への経路を説明する。</p><p data-sgn-role="meta">2026-10-09</p></div></header><section data-sgn-role="summary" data-sgn-rail="reading"><p>五つの論点</p></section><nav data-sgn-role="toc" data-sgn-rail="reading"><ol>{''.join(toc)}</ol></nav><div data-sgn-role="main">{''.join(sections)}</div><section data-sgn-role="faq" data-sgn-rail="reading"><h2>FAQ</h2>{faq}</section><aside data-sgn-role="related" data-sgn-rail="reading"><p>関連記事</p></aside><section data-sgn-role="references" data-sgn-rail="reading"><h2>出典</h2><ol><li data-sgn-source="official-source-1">Official source 2026-10-09 <a href="https://example.org/official/">Official release</a></li></ol></section></article>'''
+        toc.extend([f'<li><a href="#{root}-faq">FAQ</a></li>', f'<li><a href="#{root}-references">出典</a></li>'])
+        html = f'''<style>{css}</style><article id="{root}" lang="{lang}"><header data-sgn-role="hero"><div data-sgn-role="hero-frame" data-sgn-rail="reading"><div data-sgn-role="hero-labels">NEWS &amp; CONTEXT</div><h1>{title}</h1><p data-sgn-role="deck">市場への経路を説明する。</p><p data-sgn-role="meta">2026-10-09</p></div></header><section data-sgn-role="summary" data-sgn-rail="reading"><p>五つの論点</p></section><nav data-sgn-role="toc" data-sgn-rail="reading"><ol>{''.join(toc)}</ol></nav><div data-sgn-role="main">{''.join(sections)}</div><section data-sgn-role="faq" data-sgn-rail="reading"><h2 id="{root}-faq">FAQ</h2>{faq}</section><aside data-sgn-role="related" data-sgn-rail="reading"><p>関連記事</p></aside><section data-sgn-role="references" data-sgn-rail="reading"><h2 id="{root}-references">出典</h2><ol><li data-sgn-source="official-source-1">Official source 2026-10-09 <a href="https://example.org/official/">Official release</a></li></ol></section></article>'''
         html = re.sub(r'(<[a-z]+[^>]* data-sgn-rail="(shell|reading|visual)")', lambda m: m[1] + ' class="sgn-rail sgn-' + m[2] + '"', html)
         for index in range(12):
             html = html.replace('"section-' + str(index) + '"', '"' + root + '-section-' + str(index) + '"').replace('"#section-' + str(index) + '"', '"#' + root + '-section-' + str(index) + '"')
@@ -126,6 +127,16 @@ class ArticleQATest(unittest.TestCase):
         for old, new, code in ((f'id="{root}-section-1"', f'id="{root}-section-0"', 'ids:'), (f'href="#{root}-section-0"', 'href="#missing"', 'anchor_target'), (f'aria-labelledby="{root}-figure-title-0"', 'aria-labelledby="unknown"', 'aria_target')):
             b = deepcopy(self.bundle); b['en']['html'] = b['en']['html'].replace(old, new)
             self.assert_error(b, code)
+
+    def test_toc_requires_faq_and_references_and_excludes_its_own_heading(self):
+        root = article_root_id(self.bundle['ja']['metadata']['slug'])
+        for suffix, text in (('faq', 'FAQ'), ('references', '出典')):
+            b = deepcopy(self.bundle)
+            b['ja']['html'] = b['ja']['html'].replace(f'<li><a href="#{root}-{suffix}">{text}</a></li>', '')
+            self.assert_error(b, 'toc:')
+        b = deepcopy(self.bundle)
+        b['ja']['html'] = b['ja']['html'].replace('<ol><li><a href=', f'<h2 id="{root}-toc">目次</h2><ol><li><a href=', 1)
+        self.assertFalse(any('toc:' in e for e in validate_bundle(b)['errors']))
 
     def test_structural_parity_cannot_be_faked_by_equal_counts(self):
         b = deepcopy(self.bundle); b['en']['html'] = b['en']['html'].replace('data-sgn-section="channel-1"', 'data-sgn-section="other-fact"')
