@@ -42,7 +42,6 @@ class PublishCLITest(unittest.TestCase):
             config.write_text(json.dumps({"context": "offline-cli-fixture", "expected_user_id": 5,
                 "connection_revision": "explicit-offline-spec", "publisher_code_sha256": plugin_hash,
                 "publisher_policy_version": "sgnews-restricted-xml-css-1", "route": "query",
-                "preview_session_state_path": str(root / "sdk-session-selector.json"),
                 "browser_output_dir": str(root / "private-browser")}))
             client = FakeTransport()
             client.site_url = "https://sggroup.jp"

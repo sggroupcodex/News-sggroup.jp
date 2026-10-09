@@ -308,7 +308,6 @@ def main(argv=None) -> int:
     execute.add_argument("--state", default="state/queue.sqlite3")
     execute.add_argument("--revision-id", type=int, required=True)
     execute.add_argument("--bundle")
-    execute.add_argument("--browser-storage-state")
     execute.add_argument("--browser-artifacts")
     execute.add_argument("--chromium")
     args = parser.parse_args(argv)
@@ -318,7 +317,7 @@ def main(argv=None) -> int:
             mapping = {"context": "context", "expected_user_id": "expected_user_id",
                 "connection_revision": "connection_revision", "publisher_code_sha256": "publisher_code_sha256",
                 "publisher_policy_version": "publisher_policy_version", "route": "route",
-                "preview_session_state_path": "browser_storage_state", "browser_output_dir": "browser_artifacts"}
+                "browser_output_dir": "browser_artifacts"}
             if not isinstance(config, dict) or set(config) - set(mapping):
                 raise WordPressError("invalid_nonsecret_deployment_configuration")
             for key, attribute in mapping.items():
