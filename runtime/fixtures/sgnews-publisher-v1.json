@@ -1,0 +1,129 @@
+{
+  "fixture_only": true,
+  "api_version": 1,
+  "user": {
+    "id": 5,
+    "roles": [
+      "author"
+    ],
+    "capabilities": {
+      "edit_posts": true,
+      "publish_posts": true,
+      "sgnews_publish": true,
+      "unfiltered_html": false
+    }
+  },
+  "status": {
+    "api_version": 1,
+    "user_id": 5,
+    "can_publish": true,
+    "news_category_id": 258,
+    "language_terms": {
+      "ja": 261,
+      "en": 262
+    },
+    "features": {
+      "idempotent_creates": true,
+      "staged_updates": true,
+      "fenced_leases": true,
+      "exact_source_readback": true,
+      "bilingual_publication_gate": true,
+      "canonicalization": true
+    },
+    "namespace": "sgnews-publisher/v1",
+    "policy_version": "sgnews-restricted-xml-css-1",
+    "implementation_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "owner_user_id": 5,
+    "dedicated_capability": "sgnews_publish",
+    "has_dedicated_capability": true,
+    "dependencies_ready": true,
+    "aioseo_abilities_available": true
+  },
+  "posts": {
+    "ja": {
+      "id": 60001,
+      "status": "draft",
+      "author": 5,
+      "language": "ja",
+      "common_slug": "fixture-news-event-2026-10-09",
+      "title": "Fixture title",
+      "seo_title": "Fixture SEO title l SG Group",
+      "meta_description": "Fixture description",
+      "categories": [
+        258
+      ],
+      "content_raw": "<style>#sg-news-87f14f0bfe30 .sgn-text{color:#123456}</style><article id=\"sg-news-87f14f0bfe30\" lang=\"ja\"><h1 class=\"sgn-text\">非公開の契約テスト</h1><svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 10 10\"><title>SVG diagram</title><circle cx=\"5\" cy=\"5\" r=\"2\" fill=\"#123456\"></circle></svg></article>",
+      "source_sha256": "67285f964eafad4f83c72a9b7213c7cd394ce604322c7d5da17bff0036fd06ee",
+      "is_accessible_for_free": true,
+      "public_url": null,
+      "kind": "stage",
+      "idempotency_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "en": {
+      "id": 60002,
+      "status": "draft",
+      "author": 5,
+      "language": "en",
+      "common_slug": "fixture-news-event-2026-10-09",
+      "title": "Fixture title",
+      "seo_title": "Fixture SEO title l SG Group",
+      "meta_description": "Fixture description",
+      "categories": [
+        258
+      ],
+      "content_raw": "<style>#sg-news-87f14f0bfe30 .sgn-text{color:#123456}</style><article id=\"sg-news-87f14f0bfe30\" lang=\"en\"><h1 class=\"sgn-text\">Unpublished contract fixture</h1><svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 10 10\"><title>SVG diagram</title><circle cx=\"5\" cy=\"5\" r=\"2\" fill=\"#123456\"></circle></svg></article>",
+      "source_sha256": "3cadb0363dd15087a442ce331f8ee5bf813968ccbb569901d9eb5ebe5e1b7652",
+      "is_accessible_for_free": true,
+      "public_url": null,
+      "kind": "stage",
+      "idempotency_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  "operation_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "audit_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "bundle_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "operation_absent": {
+    "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "found": false,
+    "state": "not_found",
+    "result": null,
+    "definitive_absence": true
+  },
+  "operation_pending": {
+    "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "found": true,
+    "state": "pending",
+    "result": null,
+    "definitive_absence": false
+  },
+  "operation_complete": {
+    "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "found": true,
+    "state": "complete",
+    "result": {
+      "id": 60001,
+      "status": "draft",
+      "author": 5,
+      "language": "ja",
+      "common_slug": "fixture-news-event-2026-10-09",
+      "title": "Fixture title",
+      "seo_title": "Fixture SEO title l SG Group",
+      "meta_description": "Fixture description",
+      "categories": [
+        258
+      ],
+      "content_raw": "<style>#sg-news-87f14f0bfe30 .sgn-text{color:#123456}</style><article id=\"sg-news-87f14f0bfe30\" lang=\"ja\"><h1 class=\"sgn-text\">非公開の契約テスト</h1><svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 10 10\"><title>SVG diagram</title><circle cx=\"5\" cy=\"5\" r=\"2\" fill=\"#123456\"></circle></svg></article>",
+      "source_sha256": "67285f964eafad4f83c72a9b7213c7cd394ce604322c7d5da17bff0036fd06ee",
+      "is_accessible_for_free": true,
+      "public_url": null,
+      "kind": "stage",
+      "idempotency_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "definitive_absence": false
+  },
+  "lease": {
+    "owner": "sgnews-fixture-owner00000000",
+    "fence": 1,
+    "expires_at": 1700000120
+  }
+}

@@ -1,0 +1,197 @@
+{
+  "purpose": "Private offline regression inputs for fail-closed publisher sanitizer. No WordPress mutations performed.",
+  "root_id": "sg-news-security-probe-ja",
+  "language": "ja",
+  "cases": [
+    {
+      "id": "minimal_valid",
+      "expected": "accept",
+      "html": "<style>#sg-news-security-probe-ja{color:#10233b}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}</style><article id=\"sg-news-security-probe-ja\" lang=\"ja\"><h1>保存確認</h1><section class=\"sgn-body\"><h2 id=\"sg-news-security-probe-ja-facts\">事実</h2><p>非公開の確認。</p></section></article>"
+    },
+    {
+      "id": "local_svg_valid",
+      "expected": "accept",
+      "html": "<style>#sg-news-security-probe-ja{color:#10233b}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}</style><article id=\"sg-news-security-probe-ja\" lang=\"ja\"><h1>保存確認</h1><section class=\"sgn-body\"><h2 id=\"sg-news-security-probe-ja-facts\">事実</h2><p>非公開の確認。</p><svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 120 80\" role=\"img\" aria-labelledby=\"sg-news-security-probe-ja-svg-title\"><title id=\"sg-news-security-probe-ja-svg-title\">確認用の円</title><circle cx=\"60\" cy=\"40\" r=\"20\" fill=\"#123456\"/></svg></section></article>"
+    },
+    {
+      "id": "scoped_media_valid",
+      "expected": "accept",
+      "html": "<style>#sg-news-security-probe-ja{color:#10233b}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}@media (max-width:720px){#sg-news-security-probe-ja .sgn-body{padding-inline:12px}}@media print{#sg-news-security-probe-ja{color:#10233b}}@media (prefers-reduced-motion:reduce){#sg-news-security-probe-ja{scroll-behavior:auto}}</style><article id=\"sg-news-security-probe-ja\" lang=\"ja\"><h1>保存確認</h1><section class=\"sgn-body\"><h2 id=\"sg-news-security-probe-ja-facts\">事実</h2><p>非公開の確認。</p></section></article>"
+    },
+    {
+      "id": "global_selector_list",
+      "expected": "reject",
+      "html": "<style>#sg-news-security-probe-ja,body{color:#10233b}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}</style><article id=\"sg-news-security-probe-ja\" lang=\"ja\"><h1>保存確認</h1><section class=\"sgn-body\"><h2 id=\"sg-news-security-probe-ja-facts\">事実</h2><p>非公開の確認。</p></section></article>"
+    },
+    {
+      "id": "root_prefix_collision",
+      "expected": "reject",
+      "html": "<style>#sg-news-security-probe-ja-unrelated{color:#10233b}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}</style><article id=\"sg-news-security-probe-ja\" lang=\"ja\"><h1>保存確認</h1><section class=\"sgn-body\"><h2 id=\"sg-news-security-probe-ja-facts\">事実</h2><p>非公開の確認。</p></section></article>"
+    },
+    {
+      "id": "escaped_identifier",
+      "expected": "reject",
+      "html": "<style>#sg-news-security-probe-ja .sgn-\\62 ody{color:#10233b}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}</style><article id=\"sg-news-security-probe-ja\" lang=\"ja\"><h1>保存確認</h1><section class=\"sgn-body\"><h2 id=\"sg-news-security-probe-ja-facts\">事実</h2><p>非公開の確認。</p></section></article>"
+    },
+    {
+      "id": "sibling_escape",
+      "expected": "reject",
+      "html": "<style>#sg-news-security-probe-ja + header{color:#10233b}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}</style><article id=\"sg-news-security-probe-ja\" lang=\"ja\"><h1>保存確認</h1><section class=\"sgn-body\"><h2 id=\"sg-news-security-probe-ja-facts\">事実</h2><p>非公開の確認。</p></section></article>"
+    },
+    {
+      "id": "has_pseudo",
+      "expected": "reject",
+      "html": "<style>body:has(#sg-news-security-probe-ja){color:#10233b}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}</style><article id=\"sg-news-security-probe-ja\" lang=\"ja\"><h1>保存確認</h1><section class=\"sgn-body\"><h2 id=\"sg-news-security-probe-ja-facts\">事実</h2><p>非公開の確認。</p></section></article>"
+    },
+    {
+      "id": "css_import",
+      "expected": "reject",
+      "html": "<style>@import \"https://evil.invalid/a.css\";#sg-news-security-probe-ja{color:#10233b}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}</style><article id=\"sg-news-security-probe-ja\" lang=\"ja\"><h1>保存確認</h1><section class=\"sgn-body\"><h2 id=\"sg-news-security-probe-ja-facts\">事実</h2><p>非公開の確認。</p></section></article>"
+    },
+    {
+      "id": "css_url",
+      "expected": "reject",
+      "html": "<style>#sg-news-security-probe-ja{background-image:url(https://evil.invalid/pixel)}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}</style><article id=\"sg-news-security-probe-ja\" lang=\"ja\"><h1>保存確認</h1><section class=\"sgn-body\"><h2 id=\"sg-news-security-probe-ja-facts\">事実</h2><p>非公開の確認。</p></section></article>"
+    },
+    {
+      "id": "css_custom_property_url",
+      "expected": "reject",
+      "html": "<style>#sg-news-security-probe-ja{--sgn-cover:url(https://evil.invalid/pixel);background:var(--sgn-cover)}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}</style><article id=\"sg-news-security-probe-ja\" lang=\"ja\"><h1>保存確認</h1><section class=\"sgn-body\"><h2 id=\"sg-news-security-probe-ja-facts\">事実</h2><p>非公開の確認。</p></section></article>"
+    },
+    {
+      "id": "css_comment_split",
+      "expected": "reject",
+      "html": "<style>#sg-news-security-probe-ja{color:red;back/**/ground:url(https://evil.invalid/pixel)}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}</style><article id=\"sg-news-security-probe-ja\" lang=\"ja\"><h1>保存確認</h1><section class=\"sgn-body\"><h2 id=\"sg-news-security-probe-ja-facts\">事実</h2><p>非公開の確認。</p></section></article>"
+    },
+    {
+      "id": "css_expression",
+      "expected": "reject",
+      "html": "<style>#sg-news-security-probe-ja{width:expression(alert(1))}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}</style><article id=\"sg-news-security-probe-ja\" lang=\"ja\"><h1>保存確認</h1><section class=\"sgn-body\"><h2 id=\"sg-news-security-probe-ja-facts\">事実</h2><p>非公開の確認。</p></section></article>"
+    },
+    {
+      "id": "css_unknown_at_rule",
+      "expected": "reject",
+      "html": "<style>@font-face{font-family:probe;src:url(https://evil.invalid/x.woff)}#sg-news-security-probe-ja{color:#10233b}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}</style><article id=\"sg-news-security-probe-ja\" lang=\"ja\"><h1>保存確認</h1><section class=\"sgn-body\"><h2 id=\"sg-news-security-probe-ja-facts\">事実</h2><p>非公開の確認。</p></section></article>"
+    },
+    {
+      "id": "css_fixed_overlay",
+      "expected": "reject",
+      "html": "<style>#sg-news-security-probe-ja{position:fixed;inset:0;z-index:2147483647}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}</style><article id=\"sg-news-security-probe-ja\" lang=\"ja\"><h1>保存確認</h1><section class=\"sgn-body\"><h2 id=\"sg-news-security-probe-ja-facts\">事実</h2><p>非公開の確認。</p></section></article>"
+    },
+    {
+      "id": "event_handler",
+      "expected": "reject",
+      "html": "<style>#sg-news-security-probe-ja{color:#10233b}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}</style><article id=\"sg-news-security-probe-ja\" lang=\"ja\"><h1>保存確認</h1><section class=\"sgn-body\"><h2 id=\"sg-news-security-probe-ja-facts\">事実</h2><p onclick=\"alert(1)\">非公開の確認。</p></section></article>"
+    },
+    {
+      "id": "script_element",
+      "expected": "reject",
+      "html": "<style>#sg-news-security-probe-ja{color:#10233b}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}</style><article id=\"sg-news-security-probe-ja\" lang=\"ja\"><h1>保存確認</h1><section class=\"sgn-body\"><h2 id=\"sg-news-security-probe-ja-facts\">事実</h2><p>非公開の確認。</p></section><script>alert(1)</script></article>"
+    },
+    {
+      "id": "inline_style",
+      "expected": "reject",
+      "html": "<style>#sg-news-security-probe-ja{color:#10233b}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}</style><article id=\"sg-news-security-probe-ja\" lang=\"ja\"><h1>保存確認</h1><section class=\"sgn-body\"><h2 id=\"sg-news-security-probe-ja-facts\">事実</h2><p style=\"color:red\">非公開の確認。</p></section></article>"
+    },
+    {
+      "id": "javascript_href",
+      "expected": "reject",
+      "html": "<style>#sg-news-security-probe-ja{color:#10233b}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}</style><article id=\"sg-news-security-probe-ja\" lang=\"ja\"><h1>保存確認</h1><section class=\"sgn-body\"><h2 id=\"sg-news-security-probe-ja-facts\">事実</h2><p><a href=\"javascript:alert(1)\">確認</a></p></section></article>"
+    },
+    {
+      "id": "entity_javascript_href",
+      "expected": "reject",
+      "html": "<style>#sg-news-security-probe-ja{color:#10233b}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}</style><article id=\"sg-news-security-probe-ja\" lang=\"ja\"><h1>保存確認</h1><section class=\"sgn-body\"><h2 id=\"sg-news-security-probe-ja-facts\">事実</h2><p><a href=\"java&#x73;cript:alert(1)\">確認</a></p></section></article>"
+    },
+    {
+      "id": "data_href",
+      "expected": "reject",
+      "html": "<style>#sg-news-security-probe-ja{color:#10233b}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}</style><article id=\"sg-news-security-probe-ja\" lang=\"ja\"><h1>保存確認</h1><section class=\"sgn-body\"><h2 id=\"sg-news-security-probe-ja-facts\">事実</h2><p><a href=\"data:text/html,hello\">確認</a></p></section></article>"
+    },
+    {
+      "id": "iframe",
+      "expected": "reject",
+      "html": "<style>#sg-news-security-probe-ja{color:#10233b}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}</style><article id=\"sg-news-security-probe-ja\" lang=\"ja\"><h1>保存確認</h1><section class=\"sgn-body\"><h2 id=\"sg-news-security-probe-ja-facts\">事実</h2><p><iframe src=\"https://evil.invalid\"/></p></section></article>"
+    },
+    {
+      "id": "svg_foreign_object",
+      "expected": "reject",
+      "html": "<style>#sg-news-security-probe-ja{color:#10233b}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}</style><article id=\"sg-news-security-probe-ja\" lang=\"ja\"><h1>保存確認</h1><section class=\"sgn-body\"><h2 id=\"sg-news-security-probe-ja-facts\">事実</h2><p><svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 120 80\"><foreignObject><p xmlns=\"http://www.w3.org/1999/xhtml\">確認</p></foreignObject></svg></p></section></article>"
+    },
+    {
+      "id": "svg_external_use",
+      "expected": "reject",
+      "html": "<style>#sg-news-security-probe-ja{color:#10233b}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}</style><article id=\"sg-news-security-probe-ja\" lang=\"ja\"><h1>保存確認</h1><section class=\"sgn-body\"><h2 id=\"sg-news-security-probe-ja-facts\">事実</h2><p><svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 120 80\"><use href=\"https://evil.invalid/sprite.svg#x\"/></svg></p></section></article>"
+    },
+    {
+      "id": "svg_animate",
+      "expected": "reject",
+      "html": "<style>#sg-news-security-probe-ja{color:#10233b}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}</style><article id=\"sg-news-security-probe-ja\" lang=\"ja\"><h1>保存確認</h1><section class=\"sgn-body\"><h2 id=\"sg-news-security-probe-ja-facts\">事実</h2><p><svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 120 80\"><animate attributeName=\"href\" values=\"javascript:alert(1)\"/></svg></p></section></article>"
+    },
+    {
+      "id": "svg_image",
+      "expected": "reject",
+      "html": "<style>#sg-news-security-probe-ja{color:#10233b}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}</style><article id=\"sg-news-security-probe-ja\" lang=\"ja\"><h1>保存確認</h1><section class=\"sgn-body\"><h2 id=\"sg-news-security-probe-ja-facts\">事実</h2><p><svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 120 80\"><image href=\"https://evil.invalid/pixel\"/></svg></p></section></article>"
+    },
+    {
+      "id": "duplicate_id",
+      "expected": "reject",
+      "html": "<style>#sg-news-security-probe-ja{color:#10233b}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}</style><article id=\"sg-news-security-probe-ja\" lang=\"ja\"><h1>保存確認</h1><section class=\"sgn-body\"><h2 id=\"sg-news-security-probe-ja-facts\">事実</h2><p id=\"sg-news-security-probe-ja-facts\">非公開の確認。</p></section></article>"
+    },
+    {
+      "id": "duplicate_style",
+      "expected": "reject",
+      "html": "<style>#sg-news-security-probe-ja{color:#10233b}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}</style><style>#sg-news-security-probe-ja{color:#10233b}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}</style><article id=\"sg-news-security-probe-ja\" lang=\"ja\"><h1>保存確認</h1><section class=\"sgn-body\"><h2 id=\"sg-news-security-probe-ja-facts\">事実</h2><p>非公開の確認。</p></section></article>"
+    },
+    {
+      "id": "wrong_language",
+      "expected": "reject",
+      "html": "<style>#sg-news-security-probe-ja{color:#10233b}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}</style><article id=\"sg-news-security-probe-ja\" lang=\"en\"><h1>保存確認</h1><section class=\"sgn-body\"><h2 id=\"sg-news-security-probe-ja-facts\">事実</h2><p>非公開の確認。</p></section></article>"
+    },
+    {
+      "id": "doctype_external_entity",
+      "expected": "reject",
+      "html": "<!DOCTYPE probe [<!ENTITY xxe SYSTEM \"file:///etc/passwd\">]><style>#sg-news-security-probe-ja{color:#10233b}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}</style><article id=\"sg-news-security-probe-ja\" lang=\"ja\"><h1>保存確認</h1><section class=\"sgn-body\"><h2 id=\"sg-news-security-probe-ja-facts\">事実</h2><p>&xxe;</p></section></article>"
+    },
+    {
+      "id": "untrusted_namespace",
+      "expected": "reject",
+      "html": "<style>#sg-news-security-probe-ja{color:#10233b}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}</style><article id=\"sg-news-security-probe-ja\" lang=\"ja\"><h1>保存確認</h1><section class=\"sgn-body\"><h2 id=\"sg-news-security-probe-ja-facts\">事実</h2><p xmlns=\"https://evil.invalid/ns\">非公開の確認。</p></section></article>"
+    },
+    {
+      "id": "malformed_markup",
+      "expected": "reject",
+      "html": "<style>#sg-news-security-probe-ja{color:#10233b}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}</style><article id=\"sg-news-security-probe-ja\" lang=\"ja\"><h1>保存確認</h1><section class=\"sgn-body\"><h2 id=\"sg-news-security-probe-ja-facts\">事実</h2><p>非公開の確認。</p></p></section></article>"
+    },
+    {
+      "id": "css_numeric_exhaustion",
+      "expected": "reject",
+      "html": "<style>#sg-news-security-probe-ja{width:1e999999px}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}</style><article id=\"sg-news-security-probe-ja\" lang=\"ja\"><h1>保存確認</h1><section class=\"sgn-body\"><h2 id=\"sg-news-security-probe-ja-facts\">事実</h2><p>非公開の確認。</p></section></article>"
+    },
+    {
+      "id": "gutenberg_dynamic_block_comment",
+      "expected": "reject",
+      "html": "<style>#sg-news-security-probe-ja{color:#10233b}#sg-news-security-probe-ja .sgn-body{max-width:1080px;margin-inline:auto}</style><article id=\"sg-news-security-probe-ja\" lang=\"ja\"><h1>保存確認</h1><section class=\"sgn-body\"><h2 id=\"sg-news-security-probe-ja-facts\">事実</h2><p><!-- wp:sgnews/dynamic-probe /--></p></section></article>"
+    }
+  ],
+  "lifecycle_tests": [
+    "Unauthenticated and another authenticated owner receive denial on all writes.",
+    "Authenticated configured owner without sgnews_publish cannot acquire lease or mutate.",
+    "Caller supplying arbitrary post ID, author, taxonomy, status, meta or unknown keys is rejected.",
+    "Two simultaneous same-event requests produce at most one managed JA and one managed EN post mapping.",
+    "Same revision and same digest is a true no-op; same revision with different digest fails; stale revision cannot overwrite newer stored content.",
+    "Expired/released/replaced lease token cannot save or publish; old fencing generation fails after successor acquires.",
+    "Lease validate and guarded write are atomic; expiration before commit cannot allow an old worker to overwrite a successor.",
+    "Wrong owner/category/language/manager marker/current content digest blocks mutation.",
+    "Only JA ready or only EN ready blocks pair publication.",
+    "Both ready with missing/incorrect SEO or QA artifact digest blocks publication.",
+    "Core REST or wp-admin attempts cannot publish/delete managed draft outside the dedicated guarded route.",
+    "Failed save restores every temporarily bypassed filter/capability context and prevents later unvalidated saves.",
+    "Crash after draft creation but before response recovers mapping without duplicate post creation.",
+    "Crash/exception after first-language publication records durable partial state; retry addresses only remaining peer and never recreates posts.",
+    "Directly changed managed post content causes digest mismatch and fail-closed publication.",
+    "All article fragments survive stored content.raw read-back unchanged after canonical serialization, and real browser parses canonical HTML without additional nodes.",
+    "All bounded input limits fail before expensive parse or persistence; recursion and SVG coordinate/path limits enforce finite values.",
+    "A registered probe shortcode with a side-effect counter remains unexecuted through the final public the_content filter chain. Encode literal square brackets in canonical HTML text and attribute values or fail closed; prohibit bracket syntax in CSS. Recheck future shortcode tags cannot activate earlier stored content."
+  ]
+}
