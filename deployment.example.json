@@ -1,0 +1,9 @@
+{
+  "context": "replace-with-actual-persistent-execution-context",
+  "expected_user_id": 5,
+  "connection_revision": "replace-with-current-observed-connection-revision",
+  "publisher_code_sha256": "replace-with-sha256-of-reviewed-and-installed-php-file",
+  "publisher_policy_version": "sgnews-restricted-xml-css-1",
+  "route": "query",
+  "browser_output_dir": "private_qa/live-browser"
+}

@@ -1,0 +1,7 @@
+{
+  "objective": "Monitor significant international developments across the requested eight fields and publish verified, complete Japanese and English News articles without duplicates.",
+  "genres": ["financial markets", "economy", "military", "geopolitics", "politics", "strategic chokepoints", "security", "shipping and sea lanes"],
+  "production_enabled": false,
+  "authoritative_prompt": "editorial-prompt-ja.txt",
+  "authoritative_prompt_sha256": "replace-with-sha256-of-the-private-authoritative-prompt"
+}
