@@ -276,13 +276,96 @@ final class SGNews_Publisher {
     private const NS = 'sgnews-publisher/v1';
     private const LEASE = '_sgnews_publisher_lease_v1';
     private const BARRIER = '_sgnews_publisher_mutation_v1';
+    private const SETUP_PAGE = 'sggroup-news-publisher';
+    private const SETUP_ACTION = 'sgnews_grant_publisher';
     private static bool $internal = false;
     private static int $seoReadID = 0;
     public static function boot(): void {
         add_action('rest_api_init', [self::class, 'routes']);
+        add_action('admin_menu', [self::class, 'setupMenu']);
+        add_action('admin_post_' . self::SETUP_ACTION, [self::class, 'setupGrant']);
         add_filter('the_content', [self::class, 'render'], PHP_INT_MAX);
         add_filter('map_meta_cap', [self::class, 'protect'], 20, 4);
         add_filter('aioseo_schema_output', [self::class, 'freeSchema'], 20);
+    }
+    public static function setupMenu(): void {
+        if (current_user_can('manage_options')) {
+            add_options_page('SGGroup News Publisher', 'SGGroup News Publisher', 'manage_options', self::SETUP_PAGE, [self::class, 'setupPage']);
+        }
+    }
+    private static function setupChecks(): array {
+        $owner = get_userdata(self::OWNER);
+        $site = rtrim(home_url('/'), '/');
+        $category = get_term(self::NEWS, 'category');
+        $taxonomy = taxonomy_exists('sg-group-language-controller');
+        $ja = $taxonomy ? get_term(261, 'sg-group-language-controller') : false;
+        $en = $taxonomy ? get_term(262, 'sg-group-language-controller') : false;
+        return [
+            'site'=>$site === 'https://sggroup.jp',
+            'owner'=>$owner instanceof WP_User && (int)$owner->ID === self::OWNER && array_values($owner->roles) === ['author']
+                && user_can($owner, 'edit_posts') && user_can($owner, 'publish_posts') && !user_can($owner, 'manage_options'),
+            'category'=>$category && !is_wp_error($category) && (int)$category->term_id === self::NEWS
+                && $category->taxonomy === 'category' && $category->slug === 'news',
+            'languages'=>$ja && !is_wp_error($ja) && (int)$ja->term_id === 261 && $ja->taxonomy === 'sg-group-language-controller' && $ja->slug === 'ja'
+                && $en && !is_wp_error($en) && (int)$en->term_id === 262 && $en->taxonomy === 'sg-group-language-controller' && $en->slug === 'en',
+            'dom'=>class_exists('DOMDocument'), 'seo'=>self::seoAvailable(),
+            'granted'=>$owner instanceof WP_User && user_can($owner, self::CAP)
+        ];
+    }
+    public static function setupPage(): void {
+        if (!current_user_can('manage_options')) {
+            wp_die(esc_html('この設定はサイト管理者のみ操作できます。'), '', ['response'=>403]);
+        }
+        $checks = self::setupChecks();
+        $ready = !in_array(false, array_intersect_key($checks, array_flip(['site','owner','category','languages','dom','seo'])), true);
+        echo '<div class="wrap"><h1>' . esc_html('SGGroup News Publisher') . '</h1>';
+        echo '<p>' . esc_html('投稿者ID 5に、ニュース公開専用の権限 sgnews_publish のみを付与します。投稿者の役割は変更しません。公開前の検証は別途必要です。') . '</p>';
+        $notice = isset($_GET['sgnews_setup']) && is_string($_GET['sgnews_setup']) ? $_GET['sgnews_setup'] : '';
+        if ($notice === 'granted') {
+            echo '<div class="notice notice-success"><p>' . esc_html('設定を保存しました。実行側で投稿者本人と公開条件を再確認してください。') . '</p></div>';
+        }
+        $labels = ['site'=>'対象サイト: https://sggroup.jp', 'owner'=>'固定投稿者: ID 5 / 投稿者のみ',
+            'category'=>'Newsカテゴリー: 258 / news', 'languages'=>'言語: 日本語 261 / ja、英語 262 / en',
+            'dom'=>'PHP DOM拡張', 'seo'=>'AIOSEOのSEO読取・更新機能', 'granted'=>'専用権限 sgnews_publish'];
+        echo '<table class="widefat striped"><tbody>';
+        foreach ($labels as $key=>$label) {
+            echo '<tr><th scope="row">' . esc_html($label) . '</th><td>' . esc_html($checks[$key] ? '確認済み' : '要確認') . '</td></tr>';
+        }
+        echo '</tbody></table>';
+        if (!$ready) {
+            echo '<p>' . esc_html('要確認の項目を整えてから、この画面を再読込してください。条件が揃うまで権限は付与できません。') . '</p>';
+        } elseif (!$checks['granted']) {
+            echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+            echo '<input type="hidden" name="action" value="' . esc_attr(self::SETUP_ACTION) . '" />';
+            wp_nonce_field(self::SETUP_ACTION, '_wpnonce', false);
+            echo '<p><button type="submit" class="button button-primary">' . esc_html('投稿者ID 5に専用権限のみを付与') . '</button></p></form>';
+        }
+        echo '</div>';
+    }
+    public static function setupGrant(): void {
+        if (!current_user_can('manage_options')) {
+            wp_die(esc_html('この設定はサイト管理者のみ操作できます。'), '', ['response'=>403]);
+        }
+        if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST') {
+            wp_die(esc_html('設定画面から送信してください。'), '', ['response'=>405]);
+        }
+        if (array_diff(array_keys($_POST), ['action','_wpnonce']) || ($_POST['action'] ?? null) !== self::SETUP_ACTION
+                || !isset($_POST['_wpnonce']) || !is_string($_POST['_wpnonce']) || $_POST['_wpnonce'] === ''
+                || ($_REQUEST['_wpnonce'] ?? null) !== $_POST['_wpnonce']) {
+            wp_die(esc_html('設定画面から送信してください。'), '', ['response'=>400]);
+        }
+        check_admin_referer(self::SETUP_ACTION, '_wpnonce');
+        $checks = self::setupChecks();
+        if (in_array(false, array_intersect_key($checks, array_flip(['site','owner','category','languages','dom','seo'])), true)) {
+            wp_die(esc_html('設定条件を確認し、この画面を再読込してください。'), '', ['response'=>409]);
+        }
+        if (!$checks['granted']) {
+            // The owner and capability are constants; submitted identities and
+            // roles are never accepted, and no activation hook grants access.
+            get_userdata(self::OWNER)->add_cap(self::CAP, true);
+        }
+        wp_safe_redirect(admin_url('options-general.php?page=' . self::SETUP_PAGE . '&sgnews_setup=granted'));
+        exit;
     }
     public static function routes(): void {
         foreach ([

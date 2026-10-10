@@ -81,6 +81,7 @@ node runtime/tests/test_wpvibe_driver.js
 php -l wordpress/sggroup-news-publisher.php
 php wordpress/test-sanitizer.php
 php wordpress/test-lifecycle.php
+php wordpress/test-admin-setup.php
 ```
 
 Chromium tests default to `/usr/bin/chromium`. See the browser module for its
@@ -187,7 +188,8 @@ revision and reviewed deployed PHP hash. Run
 The example contains placeholders and cannot make the worker ready. Authorization
 must stay out of this configuration file.
 
-See `wordpress/admin-install.md` for the scoped administrator deployment and
+See `wordpress/plugin-review.md` for the Japanese installation review, and
+`wordpress/admin-install.md` for the scoped administrator deployment and
 recovery procedure. The PHP lifecycle harness uses WordPress API doubles to
 exercise ordering and injected failures; it does not establish live database,
 theme, language-controller or AIOSEO compatibility.
