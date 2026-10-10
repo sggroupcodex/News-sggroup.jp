@@ -41,6 +41,11 @@ and its actual active WordPress template. Chromium inspects this private theme
 snapshot on loopback with the approved site's asset base. This is labelled an
 authenticated saved-theme preview, never a live public page. Browser cookies or
 ordinary edit_post permission are unnecessary. No new credentials are created.
+
+The native tool driver can use --transport wpvibe --bridge-dir PRIVATE_RPC_DIR
+to retain the existing Author5 connection without WP_AUTHORIZATION. The RPC
+directory must be fresh, empty and mode0700. authenticate verifies this Author
+with GET only; its success never establishes publisher readiness or opens gates.
 """
 
 from __future__ import annotations
@@ -64,6 +69,7 @@ from .state import StateError, StateStore
 from .workflow import Workflow, safe_error
 from .wordpress_publisher_adapter import PublicPageVerifier, ScopedPublisherAdapter
 from .wordpress_transport import WordPressError, WordPressTransport
+from .tool_transport import ToolWordPressTransport
 
 
 def _private_json(path: Path, value: dict):
@@ -265,8 +271,35 @@ class _Validator:
         return validate_bundle(bundle)
 
 
-def configured_adapter(args):
-    transport = WordPressTransport.from_environment(route=args.route)
+def configured_transport(args):
+    if getattr(args, "transport", "direct") == "wpvibe":
+        if not args.bridge_dir:
+            raise WordPressError("private_bridge_directory_required")
+        return ToolWordPressTransport.from_environment(bridge_dir=args.bridge_dir,
+            expected_user_id=args.expected_user_id, route=args.route,
+            response_timeout=args.bridge_timeout)
+    if getattr(args, "bridge_dir", None):
+        raise WordPressError("bridge_directory_requires_tool_transport")
+    return WordPressTransport.from_environment(route=args.route)
+
+
+def authenticate(transport, args):
+    user = transport.get_current_user()
+    roles, caps = user.get("roles"), user.get("capabilities")
+    if type(user.get("id")) is not int or user["id"] != 5 or args.expected_user_id != 5:
+        raise WordPressError("intended_author_identity_mismatch")
+    if (roles != ["author"]
+            or not isinstance(caps, dict) or caps.get("manage_options") is True
+            or caps.get("edit_posts") is not True or caps.get("publish_posts") is not True):
+        raise WordPressError("intended_author_capabilities_missing")
+    return {"authenticated": True, "user_id": 5, "role": "author",
+            "site_url": transport.site_url, "context": args.context,
+            "connection_revision": args.connection_revision,
+            "production_ready": False, "authentication_only": True}
+
+
+def configured_adapter(args, transport=None):
+    transport = transport or configured_transport(args)
     plugin_digest = hashlib.sha256(Path(args.approved_plugin).read_bytes()).hexdigest()
     if args.publisher_code_sha256 and args.publisher_code_sha256 != plugin_digest:
         raise WordPressError("approved_local_plugin_artifact_hash_mismatch")
@@ -291,6 +324,9 @@ def configured_adapter(args):
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--config", help="Nonsecret reviewed deployment JSON; never stores Authorization/cookies")
+    parser.add_argument("--transport", choices=("direct", "wpvibe"), default="direct")
+    parser.add_argument("--bridge-dir", help="Fresh empty private0700 tool RPC directory; no credentials")
+    parser.add_argument("--bridge-timeout", type=float, default=45, help="Tool response deadline in seconds, at most60")
     parser.add_argument("--route", choices=("pretty", "query"))
     parser.add_argument("--context")
     parser.add_argument("--connection-revision")
@@ -299,6 +335,7 @@ def main(argv=None) -> int:
     parser.add_argument("--publisher-code-sha256")
     parser.add_argument("--publisher-policy-version", default="sgnews-restricted-xml-css-1")
     sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("authenticate", help="GET-only Author5 identity check; never establishes publisher readiness")
     sub.add_parser("diagnose", help="Verify deployed plugin hash/policy and actual identity with GET only")
     canonical = sub.add_parser("canonicalize", help="Normalize one private fragment before its audits; no saved post")
     canonical.add_argument("--language", choices=("ja", "en"), required=True)
@@ -312,22 +349,28 @@ def main(argv=None) -> int:
     execute.add_argument("--browser-artifacts")
     execute.add_argument("--chromium")
     args = parser.parse_args(argv)
+    transport = None
     try:
         if args.config:
             config = json.loads(Path(args.config).read_text(encoding="utf-8"))
             mapping = {"context": "context", "expected_user_id": "expected_user_id",
                 "connection_revision": "connection_revision", "publisher_code_sha256": "publisher_code_sha256",
                 "publisher_policy_version": "publisher_policy_version", "route": "route",
-                "browser_output_dir": "browser_artifacts"}
+                "browser_output_dir": "browser_artifacts", "transport": "transport"}
             if not isinstance(config, dict) or set(config) - set(mapping):
                 raise WordPressError("invalid_nonsecret_deployment_configuration")
             for key, attribute in mapping.items():
                 if key in config:
                     setattr(args, attribute, config[key])
-        if (args.route not in ("pretty", "query") or not args.context or not args.connection_revision
+        if (args.transport not in ("direct", "wpvibe") or args.route not in ("pretty", "query") or not args.context or not args.connection_revision
                 or type(args.expected_user_id) is not int or args.expected_user_id <= 0):
             raise WordPressError("explicit_current_runtime_binding_required")
-        adapter, binding = configured_adapter(args)
+        transport = configured_transport(args)
+        if args.command == "authenticate":
+            result = authenticate(transport, args)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+        adapter, binding = configured_adapter(args, transport=transport)
         if args.command == "diagnose":
             result = {"passed": True, "runtime_binding": binding,
                       "supports_idempotent_creates": adapter.supports_idempotent_creates,
@@ -354,6 +397,9 @@ def main(argv=None) -> int:
         print(json.dumps({"passed": False, "error": {"type": type(error).__name__,
                                                     "code": "local_runtime_configuration_failed"}}))
         return 2
+    finally:
+        if transport is not None and isinstance(transport, ToolWordPressTransport):
+            transport.close()
 
 
 if __name__ == "__main__":

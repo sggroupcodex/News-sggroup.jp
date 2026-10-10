@@ -6,6 +6,7 @@ import io
 import json
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 from runtime.wordpress_publisher_adapter import NAMESPACE, PublicPageVerifier, ScopedPublisherAdapter
 from runtime.wordpress_transport import WordPressError, WordPressTransport
@@ -141,6 +142,57 @@ class PublisherContractTests(unittest.TestCase):
         self.assertEqual(mutation["lease_fence"], 17)
         self.assertTrue(mutation["lease_owner"].startswith("sgnews-"))
         self.assertIn(("POST", NAMESPACE + "/lease/release"), [(m, e) for m, e, _ in client.calls])
+
+    def _assert_malformed_mutation_journal(self, stage, mutate):
+        # Reuse the explicitly simulated workflow's real SQLite gate/lease setup.
+        # No live evidence or WordPress operation is produced by this fixture.
+        from runtime.tests.test_workflow import WorkflowTests
+        harness = WorkflowTests(methodName="runTest")
+        harness.setUp()
+        try:
+            harness.ready()
+            lease = harness.store.acquire(harness.revision_id, "adapter-receipt-fixture")
+            client, adapter = self.adapter()
+            if stage == "publish":
+                adapter.authorize_publication(stage_ids={"ja": 60001, "en": 60002},
+                    audit_sha256=FIXTURE["audit_sha256"], bundle_digest=FIXTURE["bundle_digest"])
+            endpoint = NAMESPACE + ("/articles/draft" if stage == "draft" else "/articles/publish")
+            original_request = client.request
+            def malformed_receipt(method, route, **kwargs):
+                value = original_request(method, route, **kwargs)
+                return mutate(value) if method == "POST" and route == endpoint else value
+            payload = draft_payload() if stage == "draft" else {"stage_post_id": 60001}
+            operation = (lambda key: adapter.stage_draft("ja", payload, None, key)) if stage == "draft" else (
+                lambda key: adapter.publish_post(60001, key))
+            with patch.object(client, "request", side_effect=malformed_receipt), self.assertRaises(WordPressError) as caught:
+                harness.workflow._operation(lease, "ja", stage, payload, None, operation)
+            self.assertTrue(caught.exception.ambiguous_write)
+            with harness.store.connect() as db:
+                journal = db.execute("SELECT status,result,error FROM operations").fetchone()
+            self.assertEqual(journal["status"], "ambiguous")
+            self.assertIsNone(journal["result"])
+            self.assertTrue(json.loads(journal["error"])["ambiguous_write"])
+            self.assertEqual(sum(method == "POST" and route == endpoint for method, route, _ in client.calls), 1)
+            if stage == "publish":
+                self.assertEqual(client.posts[70001]["status"], "publish")
+        finally:
+            harness.tearDown()
+
+    def test_malformed_saved_draft_receipt_is_journaled_ambiguous(self):
+        mutations = [lambda post: {"id": post["id"]}, lambda post: {**post, "author": 1},
+                     lambda post: {**post, "source_sha256": "0" * 64},
+                     lambda post: {**post, "status": "publish", "public_url": "https://example.org/published/"}]
+        for mutation in mutations:
+            with self.subTest(mutation=mutations.index(mutation)):
+                self._assert_malformed_mutation_journal("draft", mutation)
+
+    def test_malformed_committed_publication_receipt_is_journaled_ambiguous(self):
+        mutations = [lambda post: {"id": post["id"]}, lambda post: {**post, "author": 1},
+                     lambda post: {**post, "source_sha256": "0" * 64},
+                     lambda post: {**post, "status": "draft", "public_url": None}]
+        for mutation in mutations:
+            with self.subTest(mutation=mutations.index(mutation)):
+                self._assert_malformed_mutation_journal("publish", mutation)
 
     def test_publish_without_bilingual_audit_binding_makes_no_write(self):
         client, adapter = self.adapter()

@@ -356,6 +356,17 @@ class ScopedPublisherAdapter:
             raise WordPressError("publisher_source_hash_mismatch")
         return value
 
+    def _mutation_post(self, value: Any) -> dict:
+        # A returned POST may already have saved/published even when its
+        # normalized receipt is malformed. Only validation is wrapped here;
+        # definitive HTTP failures raised by the transport retain their meaning.
+        try:
+            return self._post(value)
+        except WordPressError as error:
+            raise WordPressError(error.code, status=error.status,
+                                 retryable=error.retryable, ambiguous_write=True,
+                                 details=error.details) from None
+
     def canonicalize(self, language: str, common_slug: str, html: str) -> dict:
         """Normalize before editorial/browser audits, never after approved evidence."""
         self.verify_ready()
@@ -420,8 +431,9 @@ class ScopedPublisherAdapter:
             if (existing_id is not None and current["status"] == "publish"
                     and not self.supports_staged_updates):
                 raise WordPressError("supported_staged_update_required")
-            post = self._post(self.transport.request("POST", NAMESPACE + "/articles/draft",
-                payload={**payload, "existing_id": existing_id, "idempotency_key": key, **lease}))
+            receipt = self.transport.request("POST", NAMESPACE + "/articles/draft",
+                payload={**payload, "existing_id": existing_id, "idempotency_key": key, **lease})
+            post = self._mutation_post(receipt)
         if post["status"] != "draft" or post["language"] != language:
             raise WordPressError("publisher_draft_response_mismatch", ambiguous_write=True)
         return post
@@ -453,11 +465,12 @@ class ScopedPublisherAdapter:
             raise WordPressError("audited_stage_changed")
         key = _key(idempotency_key)
         with self._lease() as lease:
-            result = self._post(self.transport.request("POST", NAMESPACE + "/articles/publish", payload={
+            receipt = self.transport.request("POST", NAMESPACE + "/articles/publish", payload={
                 "stage_post_id": post_id, "target_post_id": existing_id, "idempotency_key": key,
                 "expected_source_sha256": _sha(post["content_raw"]),
                 "audit_sha256": self._publication["audit_sha256"],
-                "peer_stage_post_id": peer["id"], "peer_source_sha256": _sha(peer["content_raw"]), **lease}))
+                "peer_stage_post_id": peer["id"], "peer_source_sha256": _sha(peer["content_raw"]), **lease})
+            result = self._mutation_post(receipt)
         if result["status"] != "publish" or result["language"] != language or (existing_id and result["id"] != existing_id):
             raise WordPressError("publisher_publication_response_mismatch", ambiguous_write=True)
         return result

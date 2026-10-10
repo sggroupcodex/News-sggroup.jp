@@ -27,11 +27,16 @@ def status(root: Path, context: str, database: Path, runtime_binding: dict | Non
     worker = store.status(context)
     auth_path = root / "runtime/runtime-auth-diagnostic.json"
     diagnostic = json.loads(auth_path.read_text(encoding="utf-8")) if auth_path.exists() else None
+    connector_auth_path = root / "runtime/connector-auth-diagnostic.json"
+    connector_diagnostic = (json.loads(connector_auth_path.read_text(encoding="utf-8"))
+                            if connector_auth_path.exists() else None)
     implementation = {}
     for component, path in {
         "durable_queue": "runtime/state.py",
         "publication_recovery": "runtime/workflow.py",
         "wordpress_transport": "runtime/wordpress_transport.py",
+        "connected_api_transport": "runtime/tool_transport.py",
+        "connected_api_driver": "runtime/wpvibe_driver.js",
         "scoped_wordpress_adapter": "runtime/wordpress_publisher_adapter.py",
         "publication_entrypoint": "runtime/publish.py",
         "scoped_wordpress_integration": "wordpress/sggroup-news-publisher.php",
@@ -66,6 +71,7 @@ def status(root: Path, context: str, database: Path, runtime_binding: dict | Non
         "authoritative_prompt_intact": prompt_intact,
         "implementation": implementation,
         "direct_auth_diagnostic": diagnostic,
+        "connector_auth_diagnostic": connector_diagnostic,
         "worker": worker,
         "blockers": blockers,
         "publication_workflow_ready": workflow_ready,
