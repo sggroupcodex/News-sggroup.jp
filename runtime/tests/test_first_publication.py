@@ -43,7 +43,12 @@ class FirstTransport(FakeTransport):
 
 
 class FirstPublicationTests(unittest.TestCase):
-    setUp = fixtures.WorkflowTests.setUp
+    def setUp(self):
+        fixtures.WorkflowTests.setUp(self)
+        from runtime.preflight_identity import BOOTSTRAP_FIXED_SHA256
+        self.binding.update(publisher_policy_version="sgnews-restricted-xml-css-1",
+                            publisher_code_sha256=BOOTSTRAP_FIXED_SHA256)
+
     tearDown = fixtures.WorkflowTests.tearDown
     gate_record = fixtures.WorkflowTests.gate_record
     bundle = fixtures.WorkflowTests.bundle
@@ -63,7 +68,7 @@ class FirstPublicationTests(unittest.TestCase):
             self.store.record_gate(gate, path, self.context, 10000)
         identity = {"schema_version": 1, "purpose": "controlled_private_bilingual_draft_preflight",
                     "runtime_binding": self.binding, "bundle_digest": bundle_digest(self.article), "common_slug": self.slug}
-        self.plan = {**identity, "payloads": {}, "operations": {}, "previews": {},
+        self.plan = {"identity": identity, "payloads": {}, "operations": {}, "previews": {},
                      "state": "private_drafts_verified", "publication_performed": False, "production_ready": False,
                      "structural_validation": {"passed": True, "errors": []},
                      "completed_at": datetime.fromtimestamp(self.now[0], timezone.utc).isoformat()}
@@ -330,6 +335,105 @@ class FirstPublicationTests(unittest.TestCase):
                 with self.store.transaction() as db:
                     if column == "revision_key": db.execute("UPDATE revisions SET revision_key=? WHERE id=?", (old, self.revision_id))
                     else: db.execute("UPDATE events SET baseline_date=? WHERE event_key=?", (old, event))
+        self.assertEqual(self.transport.calls, [])
+
+    def test_real_nested_journal_identity_is_required_not_flattened_or_changed(self):
+        self.prepare(); self.record()
+        original = self.plan["identity"]
+        self.plan = {**self.plan, **original}; self.plan.pop("identity")
+        self.private("preflight.json", self.plan)
+        with self.assertRaises(GateBlocked): self.record()
+        self.plan = {key: value for key, value in self.plan.items() if key not in original}
+        self.plan["identity"] = {**original, "runtime_binding": {**self.binding, "publisher_code_sha256": "unreviewed"}}
+        self.private("preflight.json", self.plan)
+        with self.assertRaises(GateBlocked): self.record()
+        self.assertEqual(self.transport.calls, [])
+
+    def recovery_plan(self):
+        from runtime.preflight_identity import BOOTSTRAP_ORIGIN_SHA256
+        origin = json.loads(json.dumps(self.plan["identity"]))
+        origin["runtime_binding"]["publisher_code_sha256"] = BOOTSTRAP_ORIGIN_SHA256
+        self.plan["identity"] = origin
+        keys = {}
+        for language, operation in self.plan["operations"].items():
+            key = fingerprint({**origin, "language": language, "operation": "draft", "payload": self.plan["payloads"][language]})
+            operation["key"] = key; keys[language] = key
+            operation["saved_readback"]["idempotency_key"] = key
+            operation["readback_runtime_binding"] = self.binding
+        original = json.loads(json.dumps(self.plan))
+        error = {"type": "WordPressError", "code": "wpvibe_tool_error", "http_status": 409, "ambiguous_write": False}
+        original.update(state="blocked", last_error=error, previews={})
+        original["operations"] = {"ja": {"key": keys["ja"], "status": "rejected", "post_id": None, "error": error},
+                                  "en": {"key": keys["en"], "status": "planned", "post_id": None}}
+        original.pop("completed_at")
+        self.origin_path = self.private("original-bootstrap-409.json", original)
+        active = {**origin, "runtime_binding": self.binding}
+        checked = datetime.fromtimestamp(self.now[0], timezone.utc).isoformat()
+        self.plan["recovery"] = {"schema_version": 1, "purpose": "reviewed_aioseo_json_bootstrap_recovery",
+            "identity": active, "origin_plan_path": str(self.origin_path),
+            "origin_plan_sha256": hashlib.sha256(self.origin_path.read_bytes()).hexdigest(),
+            "payloads_sha256": fingerprint(self.plan["payloads"]), "operation_keys": keys, "created_at": checked}
+        self.plan["recovery_reconciliations"] = {language: {"key": keys[language], "runtime_binding": self.binding,
+            "outcome": "complete", "post_id": operation["post_id"], "checked_at": checked,
+            "source_sha256": operation["source_sha256"], "metadata_sha256": operation["metadata_sha256"]}
+            for language, operation in self.plan["operations"].items()}
+        self.private("preflight.json", self.plan)
+
+    def test_reviewed_bootstrap_recovery_preserves_origin_keys_and_requires_current_actual_proofs(self):
+        self.prepare(); self.recovery_plan(); self.record()
+        result = self.workflow.execute_first_publication(self.revision_id, "worker", self.article)
+        self.assertEqual(result["state"], "complete")
+        self.assertFalse(any(call[0] == "draft" for call in self.transport.calls))
+        self.assertEqual(self.store.status(self.context)["paused"], True)
+
+    def test_reviewed_recovery_rejects_arbitrary_upgrade_or_missing_current_readback(self):
+        self.prepare(); self.recovery_plan()
+        original = json.loads(json.dumps(self.plan))
+        for change in ("unreviewed_hash", "different_connection", "missing_readback_binding", "unresolved_operation"):
+            with self.subTest(change=change):
+                self.plan = json.loads(json.dumps(original))
+                if change == "unreviewed_hash": self.plan["recovery"]["identity"]["runtime_binding"]["publisher_code_sha256"] = "0" * 64
+                elif change == "different_connection": self.plan["recovery"]["identity"]["runtime_binding"]["connection_revision"] = "another connection"
+                elif change == "missing_readback_binding": self.plan["operations"]["ja"].pop("readback_runtime_binding")
+                else:
+                    self.plan["recovery_reconciliations"]["ja"].update(outcome="unknown", post_id=None)
+                self.private("preflight.json", self.plan)
+                with self.assertRaises(GateBlocked): self.record()
+        self.assertEqual(self.transport.calls, [])
+
+    def test_actual_recovery_preflight_journal_is_adopted_without_relabeling_initial_ledger(self):
+        from runtime.tests.test_preflight_cli import PreflightCLITest
+        probe = PreflightCLITest("test_reviewed_bootstrap_recovery_keeps_exact_origin_and_same_pending_keys")
+        probe.setUp()
+        self.addCleanup(probe.tearDown)
+        original, original_bytes, keys = probe.seed_bootstrap_plan()
+        code, result = probe.run_preflight(recover=True)
+        self.assertEqual(code, 0)
+        plan = json.loads(probe.plan.read_text())
+        self.now[0] = datetime.fromisoformat(plan["completed_at"]).timestamp()
+        scope = {"runtime_binding": result["runtime_binding"], "bundle_digest": result["bundle_digest"],
+                 "common_slug": original["identity"]["common_slug"]}
+        adopted = self.store._first_plan(plan, scope)
+        self.assertEqual({language: post["key"] for language, post in adopted.items()}, keys)
+        self.assertEqual({language: post["post_id"] for language, post in adopted.items()}, {"ja": 60101, "en": 60102})
+        self.assertEqual(plan["recovery_reconciliations"]["ja"]["outcome"], "safe_to_resume")
+        self.assertEqual(plan["recovery_reconciliations"]["en"]["outcome"], "definitive_absence")
+        self.assertEqual(Path(plan["recovery"]["origin_plan_path"]).read_bytes(), original_bytes)
+        self.assertFalse(any(endpoint.endswith("/articles/publish") for _, endpoint, _ in probe.client.calls))
+        plan["operations"]["ja"].pop("readback_runtime_binding")
+        with self.assertRaises(GateBlocked):
+            self.store._first_plan(plan, scope)
+
+    def test_reviewed_recovery_rejects_original_snapshot_tamper_or_other_failure_origin(self):
+        self.prepare(); self.recovery_plan()
+        original_bytes = self.origin_path.read_bytes()
+        self.origin_path.write_bytes(original_bytes + b" ")
+        with self.assertRaises(GateBlocked): self.record()
+        original = json.loads(original_bytes); original["last_error"]["http_status"] = 500
+        self.private("original-bootstrap-409.json", original)
+        self.plan["recovery"]["origin_plan_sha256"] = hashlib.sha256(self.origin_path.read_bytes()).hexdigest()
+        self.private("preflight.json", self.plan)
+        with self.assertRaises(GateBlocked): self.record()
         self.assertEqual(self.transport.calls, [])
 
     def test_duplicate_json_and_symlink_evidence_rejected(self):

@@ -2,7 +2,7 @@
 /** Local WordPress API double: executes plugin logic, not a deployed WordPress/MySQL concurrency test. */
 define('ABSPATH', __DIR__.'/');
 $GLOBALS['options']=[]; $GLOBALS['posts']=[]; $GLOBALS['meta']=[]; $GLOBALS['seo']=[];
-$GLOBALS['current_user']=5; $GLOBALS['capabilities']=['read'=>true,'edit_posts'=>true,'publish_posts'=>true];
+$GLOBALS['current_user']=5; $GLOBALS['capabilities']=['read'=>true,'edit_posts'=>true,'publish_posts'=>true,'aioseo_page_general_settings'=>true];
 $GLOBALS['next_post']=100; $GLOBALS['current_post']=0;
 class WP_Error {
     public function __construct(public string $code,public string $message,public array $data=[]) {}
@@ -86,21 +86,49 @@ function get_permalink($id){
     return home_url('/'.get_post_meta($id,'_sgnews_language',true).'/article/news/'.($metadata['slug']??get_post($id)->post_name).'/');
 }
 function wp_unique_post_slug($slug,...$args){return $slug;}
+/** Keep JSON bytes/headers distinct from the form parameter bag, as real WordPress does. */
 class WP_REST_Request implements ArrayAccess {
-    public array $body=[];public array $params=[];
-    public function __construct($method='POST',$route=''){}
-    public function get_json_params(){return $this->body;} public function set_body_params($body){$this->body=$body;}
+    private string $body=''; private array $form=[]; private array $headers=[];
+    public array $params=[];
+    public function __construct(private string $method='POST',private string $route=''){}
+    public function get_method(){return $this->method;} public function get_route(){return $this->route;}
+    public function get_json_params(){return strtolower($this->headers['content-type']??'')==='application/json'?json_decode($this->body,true):null;}
+    public function set_body_params($body){$this->form=$body;} public function get_body_params(){return $this->form;}
+    public function set_body($body){$this->body=$body;} public function get_body(){return $this->body;}
+    public function set_header($name,$value){$this->headers[strtolower($name)]=$value;}
+    public function get_header($name){return $this->headers[strtolower($name)]??null;}
     public function offsetExists($o):bool{return isset($this->params[$o]);}
     public function offsetGet($o):mixed{return $this->params[$o]??null;}
     public function offsetSet($o,$v):void{$this->params[$o]=$v;}
     public function offsetUnset($o):void{unset($this->params[$o]);}
 }
-class FakeRestResponse {public function is_error(){return false;}public function get_status(){return 200;}}
-function rest_do_request($request){$GLOBALS['seo'][$request->body['id']]=[];return new FakeRestResponse();}
+class FakeRestResponse {
+    public function __construct(private int $status=200,private array $data=[]){}
+    public function is_error(){return $this->status>=400;} public function get_status(){return $this->status;}
+    public function get_data(){return $this->data;}
+}
+/** Models the public AIOSEO updatePosts JSON and normal object/capability checks. */
+function rest_do_request($request){
+    $GLOBALS['bootstrap_requests'][]=['method'=>$request->get_method(),'route'=>$request->get_route(),
+        'json'=>$request->get_json_params(),'form'=>$request->get_body_params(),'content_type'=>$request->get_header('Content-Type')];
+    if($request->get_method()!=='POST'||$request->get_route()!=='/aioseo/v1/post')return new FakeRestResponse(404);
+    $body=$request->get_json_params();$id=is_array($body)?($body['id']??null):null;
+    if(!is_int($id)||$id<=0)return new FakeRestResponse(400,['message'=>'Post ID is missing.']);
+    if(!current_user_can('aioseo_page_general_settings')||!current_user_can('edit_posts')
+        ||SGNews_Publisher::protect(['edit_posts'],'edit_post',get_current_user_id(),[$id])===['do_not_allow']){
+        return new FakeRestResponse(403,['message'=>'You are not allowed to update the post settings.']);
+    }
+    if($GLOBALS['fail_next_bootstrap']??false){unset($GLOBALS['fail_next_bootstrap']);return new FakeRestResponse(500);}
+    $GLOBALS['seo'][$id]=[];return new FakeRestResponse(200,['success'=>true,'posts'=>$id]);
+}
 class FakeAbility {
     public function __construct(private string $name){}
     public function execute($input){
         $id=$input['postId'];
+        if(!current_user_can('aioseo_page_general_settings')||!current_user_can('edit_posts')
+            ||SGNews_Publisher::protect(['edit_posts'],'edit_post',get_current_user_id(),[$id])===['do_not_allow']){
+            return new WP_Error('forbidden','Normal AIOSEO permission denied',['status'=>403]);
+        }
         if($this->name==='aioseo-posts/seo-data-get'){
             if(isset($GLOBALS['assert_seo_cap']))check(SGNews_Publisher::protect(['edit_posts'],'edit_post',5,[$id])===['edit_posts'],'owning read ability has exact scoped read permission');
             return $GLOBALS['seo'][$id]??new WP_Error('missing','Post not found',['status'=>404]);
@@ -113,7 +141,7 @@ function wp_get_ability($name){return new FakeAbility($name);}
 require __DIR__.'/sggroup-news-publisher.php';
 $tests=0;$failures=[];
 function check($condition,$label){global $tests,$failures;++$tests;if(!$condition)$failures[]=$label;}
-function request(array $body=[],array $params=[]){$r=new WP_REST_Request();$r->body=$body;$r->params=$params;return $r;}
+function request(array $body=[],array $params=[]){$r=new WP_REST_Request();$r->set_header('Content-Type','application/json');$r->set_body(wp_json_encode($body));$r->params=$params;return $r;}
 function okay($value,$label){check(!is_wp_error($value),$label.(is_wp_error($value)?': '.$value->message:''));return $value;}
 function rejected($value,$label){check(is_wp_error($value),$label);}
 rejected(SGNews_Publisher::permission(),'dedicated capability is required');
@@ -156,6 +184,32 @@ check(SGNews_Publisher::protect(['edit_posts'],'edit_post',5,[$ja['id']])===['do
 $oldSEO=$GLOBALS['seo'][$ja['id']];$GLOBALS['seo'][$ja['id']]['title']='External stale title';
 rejected(SGNews_Publisher::article(request([],['id'=>$ja['id']])),'actual external SEO drift rejects source readback');
 $GLOBALS['seo'][$ja['id']]=$oldSEO;
+$protectedSEO=$GLOBALS['seo'][$ja['id']];
+$outsideUpdate=wp_get_ability('aioseo-posts/seo-data-update')->execute(['postId'=>$ja['id'],'title'=>'Unscoped change','description'=>'Unscoped change']);
+check(is_wp_error($outsideUpdate) && $outsideUpdate->get_error_data()['status']===403 && $GLOBALS['seo'][$ja['id']]===$protectedSEO,'normal registered ability cannot modify a protected managed stage outside mutate');
+$GLOBALS['capabilities']['aioseo_page_general_settings']=false;
+$bootstrapCount=count($GLOBALS['bootstrap_requests']);
+rejected(SGNews_Publisher::article(request([],['id'=>$ja['id']])),'normal AIOSEO capability denial is not bypassed by scoped source read');
+check(count($GLOBALS['bootstrap_requests'])===$bootstrapCount && $GLOBALS['seo'][$ja['id']]===$protectedSEO,'capability denial attempts neither new-row bootstrap nor SEO write');
+$GLOBALS['capabilities']['aioseo_page_general_settings']=true;
+$formBootstrap=new WP_REST_Request('POST','/aioseo/v1/post');$formBootstrap->set_body_params(['id'=>$ja['id']]);
+check($formBootstrap->get_json_params()===null && $formBootstrap->get_body_params()===['id'=>$ja['id']],'form params do not become JSON params');
+check(rest_do_request($formBootstrap)->get_status()===400,'actual AIOSEO JSON handler rejects legacy form-only bootstrap');
+$externalBootstrap=new WP_REST_Request('POST','/aioseo/v1/post');$externalBootstrap->set_header('Content-Type','application/json');$externalBootstrap->set_body(wp_json_encode(['id'=>$ja['id']]));
+check(rest_do_request($externalBootstrap)->get_status()===403,'registered JSON bootstrap still rejects managed core edit outside scoped mutation');
+$bootstrapPayload=stagePayload('ja',str_repeat('j',64),'JSON bootstrap recovery');$beforeBootstrap=count($GLOBALS['posts']);
+$GLOBALS['fail_next_bootstrap']=true;
+rejected(SGNews_Publisher::draft(request($bootstrapPayload)),'registered bootstrap failure retains incomplete draft');
+$pendingBootstrap=okay(SGNews_Publisher::operation(request([],['key'=>$bootstrapPayload['idempotency_key']])),'failed bootstrap journal can be inspected');
+check($pendingBootstrap['state']==='pending' && $pendingBootstrap['safe_to_resume']===true && $pendingBootstrap['result']===null,'missing SEO row remains pending with same-key safe resume and no claimed source success');
+$bootstrapIDs=get_posts(['post_type'=>'post','author'=>5,'meta_query'=>[['key'=>'_sgnews_operation_key','value'=>$bootstrapPayload['idempotency_key']],['key'=>'_sgnews_kind','value'=>'stage']],'numberposts'=>2]);
+check(count($bootstrapIDs)===1 && count($GLOBALS['posts'])===$beforeBootstrap+1,'failed bootstrap keeps exactly one immutable owned stage');
+$bootstrapRetry=okay(SGNews_Publisher::draft(request($bootstrapPayload)),'pending identical draft resumes registered JSON bootstrap');
+$lastBootstrap=end($GLOBALS['bootstrap_requests']);
+check($lastBootstrap['method']==='POST' && $lastBootstrap['route']==='/aioseo/v1/post' && $lastBootstrap['content_type']==='application/json' && $lastBootstrap['json']===['id'=>$bootstrapIDs[0]] && $lastBootstrap['form']===[],'bootstrap sends only fixed owned post ID as real JSON to registered handler');
+check($bootstrapRetry['id']===$bootstrapIDs[0] && count($GLOBALS['posts'])===$beforeBootstrap+1 && $bootstrapRetry['seo_verified']===true,'same-key bootstrap retry reuses original stage and verifies actual SEO metadata');
+check($GLOBALS['seo'][$bootstrapRetry['id']]===['title'=>$bootstrapPayload['metadata']['aioseo_title'],'description'=>$bootstrapPayload['metadata']['aioseo_description']],'registered bootstrap followed by ability update and exact readback retains requested SEO values');
+check(SGNews_Publisher::protect(['edit_posts'],'edit_post',5,[$bootstrapRetry['id']])===['do_not_allow'] && !array_key_exists('_sgnews_publisher_mutation_v1',$GLOBALS['options']),'bootstrap leaves managed core edit protection and mutation barrier restored');
 $seoPayload=stagePayload('ja',str_repeat('s',64),'SEO retry stage');$beforeSEO=count($GLOBALS['posts']);
 $GLOBALS['fail_next_seo']=true;
 rejected(SGNews_Publisher::draft(request($seoPayload)),'stage SEO write failure keeps pending operation');
@@ -190,7 +244,7 @@ check($publishedJa['status']==='publish' && $publishedJa['id']!==$ja['id'] && $p
 $publishedEn=okay(SGNews_Publisher::publish(request(pubPayload($en,$ja,str_repeat('d',64)))),'EN publication after JA success');
 check($publishedEn['status']==='publish' && get_post($ja['id'])->post_status==='draft','immutable peer stage remains available for partial recovery');
 $pubRetry=okay(SGNews_Publisher::publish(request(pubPayload($ja,$en,str_repeat('c',64)))),'publication retry no-op');
-check($pubRetry['id']===$publishedJa['id'] && count($GLOBALS['posts'])===5,'publication retry creates no canonical duplicate');
+check($pubRetry['id']===$publishedJa['id'] && count($GLOBALS['posts'])===6,'publication retry creates no canonical duplicate');
 check(get_post($publishedEn['id'])->post_name===$slug.'-2' && $publishedEn['public_url']==='https://sggroup.jp/en/article/news/'.$slug.'/','controller supports shared public slug with distinct EN internal identifier');
 $GLOBALS['current_post']=$publishedJa['id'];
 check(SGNews_Publisher::render('fallback')===$publishedJa['content_raw'],'managed renderer returns exact validated source');

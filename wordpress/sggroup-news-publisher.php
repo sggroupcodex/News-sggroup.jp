@@ -2,7 +2,7 @@
 /**
  * Plugin Name: SG Group News Publisher
  * Description: Dedicated, fail-closed bilingual News publishing integration. Administrator installation and an explicit sgnews_publish grant are required.
- * Version: 0.1.1
+ * Version: 0.1.2
  * Requires PHP: 8.1
  * License: GPL-2.0-or-later
  */
@@ -515,17 +515,73 @@ final class SGNews_Publisher {
         }
         self::slug($metadata['slug']); return $metadata;
     }
-    private static function managed(int $id, ?string $kind=null): object {
+    private static function managed(int $id, ?string $kind=null, bool $taxonomy=true): object {
         $post=get_post($id);
         if (!$post || $post->post_type!=='post' || (int)$post->post_author!==self::OWNER || get_post_meta($id,'_sgnews_manager',true)!==self::POLICY || ($kind && get_post_meta($id,'_sgnews_kind',true)!==$kind)) { throw new RuntimeException('Post is not a managed post of the configured owner.'); }
         $lang=get_post_meta($id,'_sgnews_language',true); self::language($lang);
-        if (array_map('intval',wp_get_post_categories($id)) !== [self::NEWS] || array_map('intval',wp_get_object_terms($id,'sg-group-language-controller',['fields'=>'ids'])) !== [$lang==='ja'?261:262]) { throw new RuntimeException('Managed post category/language changed.'); }
+        if ($taxonomy && (array_map('intval',wp_get_post_categories($id)) !== [self::NEWS] || array_map('intval',wp_get_object_terms($id,'sg-group-language-controller',['fields'=>'ids'])) !== [$lang==='ja'?261:262])) { throw new RuntimeException('Managed post category/language changed.'); }
         $source=get_post_meta($id,'_sgnews_source_html',true); $hash=get_post_meta($id,'_sgnews_source_sha256',true);
         if (!is_string($source) || !is_string($hash) || !hash_equals($hash,hash('sha256',$source))) { throw new RuntimeException('Managed source integrity mismatch.'); }
         $metadata=get_post_meta($id,'_sgnews_metadata',true); self::metadata($metadata);
         if ($post->post_title!==$metadata['title'] || get_post_meta($id,'_sg_sppp_mode',true)!=='none' || get_post_meta($id,'_sg_sppp_sale',true)!=='none') { throw new RuntimeException('Managed title or free-access state changed.'); }
         if (SGNews_Fragment::canonical($source,self::root($metadata['slug']),$lang)!==$source) { throw new RuntimeException('Stored source is not canonical under the current policy.'); }
         return $post;
+    }
+    /** A pending, newly created draft may finish taxonomy only while its complete saved proof is unchanged. */
+    private static function initializationProof(int $id): string {
+        $post=get_post($id); $values=[];
+        foreach(['post_type','post_author','post_title','post_content','post_status','post_name'] as $field) { $values[$field]=$post->$field; }
+        foreach(['_sgnews_manager','_sgnews_kind','_sgnews_source_html','_sgnews_source_sha256','_sgnews_metadata','_sgnews_language',
+            '_sgnews_operation_key','_sgnews_target_id','_sgnews_target_source_sha256','_sg_sppp_mode','_sg_sppp_sale','_sg_sppp_lang'] as $field) { $values[$field]=get_post_meta($id,$field,true); }
+        return hash('sha256',wp_json_encode($values));
+    }
+    private static function initialization(int $id,string $kind,string $key,string $fingerprint): array {
+        $post=self::managed($id,$kind,false); $marker=get_post_meta($id,'_sgnews_initialization',true);
+        $fields=['schema_version','phase','operation_kind','operation_fingerprint','proof_sha256','baseline_categories','baseline_terms'];
+        if (!is_array($marker) || count($marker)!==count($fields) || array_diff(array_keys($marker),$fields)
+            || ($marker['schema_version']??null)!==1 || !in_array($marker['phase']??null,['category','language'],true)
+            || ($marker['operation_kind']??null)!==($kind==='stage'?'draft':'publish') || ($marker['operation_fingerprint']??null)!==$fingerprint
+            || $post->post_status!=='draft' || get_post_meta($id,'_sgnews_operation_key',true)!==$key
+            || ($marker['proof_sha256']??null)!==self::initializationProof($id)) { throw new RuntimeException('Incomplete source initialization cannot be proved; administrator inspection is required.'); }
+        self::digest($fingerprint); self::digest($marker['proof_sha256']);
+        foreach(['baseline_categories','baseline_terms'] as $field) {
+            if (!is_array($marker[$field]) || !array_is_list($marker[$field])) { throw new RuntimeException('Incomplete taxonomy baseline is invalid.'); }
+            foreach($marker[$field] as $term) { if (!is_int($term) || $term<1) { throw new RuntimeException('Incomplete taxonomy baseline is invalid.'); } }
+        }
+        $categories=array_map('intval',wp_get_post_categories($id)); $terms=wp_get_object_terms($id,'sg-group-language-controller',['fields'=>'ids']);
+        if (is_wp_error($terms)) { throw new RuntimeException('Incomplete taxonomy could not be read.'); } $terms=array_map('intval',$terms);
+        $expected=[get_post_meta($id,'_sgnews_language',true)==='ja'?261:262];
+        if (($categories!==[self::NEWS] && !($marker['phase']==='category' && $categories===$marker['baseline_categories']))
+            || ($terms!==$marker['baseline_terms'] && !($marker['phase']==='language' && $terms===$expected))) { throw new RuntimeException('Incomplete source taxonomy changed outside the recorded initialization.'); }
+        return $marker;
+    }
+    private static function saveInitialization(int $id,array $marker): void {
+        update_post_meta($id,'_sgnews_initialization',$marker);
+        if (get_post_meta($id,'_sgnews_initialization',true)!==$marker) { throw new RuntimeException('Source initialization checkpoint could not be verified.'); }
+    }
+    private static function finishInitialization(int $id,string $kind,string $key,string $fingerprint): void {
+        $marker=self::initialization($id,$kind,$key,$fingerprint);
+        if ($marker['phase']==='category') {
+            if (array_map('intval',wp_get_post_categories($id))!==[self::NEWS]) {
+                $assigned=wp_set_post_categories($id,[self::NEWS],false);
+                if (is_wp_error($assigned)) { throw new RuntimeException('News category assignment failed.'); }
+            }
+            if (array_map('intval',wp_get_post_categories($id))!==[self::NEWS]) { throw new RuntimeException('News category assignment did not persist.'); }
+            $marker['phase']='language'; self::saveInitialization($id,$marker);
+        }
+        $expected=[get_post_meta($id,'_sgnews_language',true)==='ja'?261:262];
+        $terms=wp_get_object_terms($id,'sg-group-language-controller',['fields'=>'ids']);
+        if (is_wp_error($terms)) { throw new RuntimeException('Language assignment could not be read.'); }
+        if (array_map('intval',$terms)!==$expected) {
+            $assigned=wp_set_object_terms($id,$expected,'sg-group-language-controller',false);
+            if (is_wp_error($assigned)) { throw new RuntimeException('Language assignment failed.'); }
+        }
+        self::managed($id,$kind); $marker['phase']='complete'; self::saveInitialization($id,$marker);
+    }
+    private static function resumablePost(int $id,string $kind,string $key,string $fingerprint): void {
+        try { self::managed($id,$kind); }
+        catch(Throwable $e) { self::initialization($id,$kind,$key,$fingerprint); return; }
+        if (get_post_meta($id,'_sgnews_operation_key',true)!==$key) { throw new RuntimeException('Pending operation post identity changed.'); }
     }
     private static function normalized(int $id): array {
         $post=self::managed($id); $meta=get_post_meta($id,'_sgnews_metadata',true);
@@ -581,26 +637,38 @@ final class SGNews_Publisher {
         try {
             $key=self::key($request['key']); $op=self::fresh(self::operationName($key));
             if (is_array($op)) {
-                try { $result=self::normalized((int)$op['post_id']); }
+                if (!in_array($op['kind']??null,['draft','publish'],true) || !in_array($op['state']??null,['pending','complete'],true)) { throw new RuntimeException('Operation checkpoint is invalid.'); }
+                $kind=$op['kind']==='draft'?'stage':'canonical'; $postKey=$kind==='stage'?$key:'canonical:'.$key;
+                $id=(int)($op['post_id']??0);
+                if (!$id && $op['state']==='pending') {
+                    $id=self::recoverPost($postKey,$kind)??0;
+                    if (!$id) { return ['key'=>$key,'found'=>true,'state'=>'pending','kind'=>$op['kind'],'fingerprint'=>$op['fingerprint'],'result'=>null,'definitive_absence'=>false,'safe_to_resume'=>false]; }
+                }
+                self::resumablePost($id,$kind,$postKey,$op['fingerprint']);
+                try { $result=self::normalized($id); }
                 catch(Throwable $e) { if($op['state']!=='pending') { throw $e; } $result=null; }
                 return ['key'=>$key,'found'=>true,'state'=>$op['state'],'kind'=>$op['kind'],'fingerprint'=>$op['fingerprint'],'result'=>$result,'definitive_absence'=>false,'safe_to_resume'=>$op['state']==='pending' && !is_array(self::fresh(self::BARRIER))];
             }
             $id=self::recoverPost($key,'stage');
             if ($id) {
-                self::managed($id,'stage'); try { $result=self::normalized($id); } catch(Throwable $e) { $result=null; }
+                $marker=get_post_meta($id,'_sgnews_initialization',true);
+                self::resumablePost($id,'stage',$key,is_array($marker)?($marker['operation_fingerprint']??''):'');
+                try { $result=self::normalized($id); } catch(Throwable $e) { $result=null; }
                 return ['key'=>$key,'found'=>true,'state'=>'pending','kind'=>'draft','result'=>$result,'definitive_absence'=>false,'safe_to_resume'=>!is_array(self::fresh(self::BARRIER))];
             }
             $canonical=self::recoverPost('canonical:'.$key,'canonical');
             if ($canonical) {
                 $busy=is_array(self::fresh(self::BARRIER));
-                self::managed($canonical,'canonical'); try { $result=self::normalized($canonical); } catch(Throwable $e) { $result=null; }
+                $marker=get_post_meta($canonical,'_sgnews_initialization',true);
+                self::resumablePost($canonical,'canonical','canonical:'.$key,is_array($marker)?($marker['operation_fingerprint']??''):'');
+                try { $result=self::normalized($canonical); } catch(Throwable $e) { $result=null; }
                 return ['key'=>$key,'found'=>true,'state'=>'pending','kind'=>'publish','result'=>$result,'definitive_absence'=>false,'safe_to_resume'=>!$busy];
             }
             $busy=is_array(self::fresh(self::BARRIER));
             return ['key'=>$key,'found'=>false,'state'=>$busy?'pending':'not_found','result'=>null,'definitive_absence'=>!$busy];
         } catch(Throwable $e) { return self::fail($e); }
     }
-    private static function writeSource(?int $id,string $kind,array $b,string $source,array $metadata): int {
+    private static function writeSource(?int $id,string $kind,array $b,string $source,array $metadata,?array $initialization=null): int {
         // KSES remains active: only the readable fallback goes through core post_content.
         $fallback=preg_replace('/\A<style>.*?<\/style>/s','',$source);
         $fields=['post_type'=>'post','post_author'=>self::OWNER,'post_title'=>$metadata['title'],'post_content'=>wp_kses_post($fallback),'post_status'=>'draft',
@@ -611,8 +679,30 @@ final class SGNews_Publisher {
                 '_sgnews_target_source_sha256'=>$kind==='stage' && !empty($b['existing_id']) ? get_post_meta($b['existing_id'],'_sgnews_source_sha256',true) : '',
                 '_sg_sppp_mode'=>'none','_sg_sppp_sale'=>'none','_sg_sppp_lang'=>$b['language']]];
         if ($id) { $fields['ID']=$id; $existing=get_post($id); $fields['post_name']=$existing->post_name; if ($existing->post_status==='publish') { $fields['post_status']='publish'; } }
+        if (!$id && $initialization!==null) {
+            // An exception during core/meta insertion must never be mistaken for safe absence.
+            $intent=['kind'=>$initialization['kind'],'state'=>'pending','fingerprint'=>$initialization['fingerprint'],'post_id'=>0,'phase'=>'creating'];
+            if ($kind==='canonical') { $intent['new']=true; }
+            update_option(self::operationName($initialization['key']),$intent,false);
+            if (self::fresh(self::operationName($initialization['key']))!==$intent) { throw new RuntimeException('Initial creation intent could not be verified.'); }
+        }
         $saved=wp_insert_post(wp_slash($fields),true);
         if (is_wp_error($saved)) { throw new RuntimeException('WordPress save failed: '.$saved->get_error_message()); }
+        if (!$id && $initialization!==null) {
+            self::managed((int)$saved,$kind,false);
+            $terms=wp_get_object_terms($saved,'sg-group-language-controller',['fields'=>'ids']);
+            if (is_wp_error($terms)) { throw new RuntimeException('Initial language baseline could not be read.'); }
+            $marker=['schema_version'=>1,'phase'=>'category','operation_kind'=>$initialization['kind'],
+                'operation_fingerprint'=>$initialization['fingerprint'],'proof_sha256'=>self::initializationProof((int)$saved),
+                'baseline_categories'=>array_map('intval',wp_get_post_categories($saved)),'baseline_terms'=>array_map('intval',$terms)];
+            self::saveInitialization((int)$saved,$marker);
+            $record=['kind'=>$initialization['kind'],'state'=>'pending','fingerprint'=>$initialization['fingerprint'],'post_id'=>(int)$saved];
+            if ($kind==='canonical') { $record['new']=true; }
+            update_option(self::operationName($initialization['key']),$record,false);
+            if (self::fresh(self::operationName($initialization['key']))!==$record) { throw new RuntimeException('Initial operation checkpoint could not be verified.'); }
+            self::finishInitialization((int)$saved,$kind,$b['idempotency_key'],$initialization['fingerprint']);
+            return (int)$saved;
+        }
         wp_set_post_categories($saved,[self::NEWS],false);
         $assigned=wp_set_object_terms($saved,[$b['language']==='ja'?261:262],'sg-group-language-controller',false);
         if (is_wp_error($assigned)) { throw new RuntimeException('Language assignment failed.'); }
@@ -632,17 +722,25 @@ final class SGNews_Publisher {
                 if (is_array($op)) {
                     if ($op['kind']!=='draft' || !hash_equals($op['fingerprint'],$fingerprint)) { throw new RuntimeException('Idempotency key was reused for a different operation/source.'); }
                     if($op['state']==='complete') { return self::normalized((int)$op['post_id']); }
-                    $recovered=(int)$op['post_id'];
+                    if ((int)($op['post_id']??0)>0) { $recovered=(int)$op['post_id']; }
+                    elseif (!$recovered) { throw new RuntimeException('Initial stage creation is unproven; administrator inspection is required.'); }
                 }
                 $canonical=self::fresh(self::canonicalName($metadata['slug'],$b['language']));
                 $actualTarget=is_array($canonical)?(int)$canonical['post_id']:null;
                 if ($actualTarget!==$b['existing_id']) { throw new RuntimeException('Canonical target changed; reconcile before saving a revision.'); }
                 if ($actualTarget) { self::managed($actualTarget,'canonical'); }
                 if ($recovered) {
+                    if (get_post_meta($recovered,'_sgnews_source_html',true)!==$source || get_post_meta($recovered,'_sgnews_source_sha256',true)!==hash('sha256',$source)
+                        || get_post_meta($recovered,'_sgnews_metadata',true)!==$metadata || get_post_meta($recovered,'_sgnews_language',true)!==$b['language']
+                        || (int)get_post_meta($recovered,'_sgnews_target_id',true)!==(int)($b['existing_id']??0)) { throw new RuntimeException('Recovered stage differs from retry payload.'); }
+                    $marker=get_post_meta($recovered,'_sgnews_initialization',true);
+                    if (is_array($marker) && ($marker['phase']??null)!=='complete') {
+                        self::lease($b['lease_owner'],$b['lease_fence']);
+                        self::finishInitialization($recovered,'stage',$b['idempotency_key'],$fingerprint);
+                    }
                     self::managed($recovered,'stage');
-                    if (get_post_meta($recovered,'_sgnews_source_sha256',true)!==hash('sha256',$source) || get_post_meta($recovered,'_sgnews_metadata',true)!==$metadata || (int)get_post_meta($recovered,'_sgnews_target_id',true)!==(int)($b['existing_id']??0)) { throw new RuntimeException('Recovered stage differs from retry payload.'); }
                     $id=$recovered;
-                } else { self::lease($b['lease_owner'],$b['lease_fence']); $id=self::writeSource(null,'stage',$b,$source,$metadata); }
+                } else { self::lease($b['lease_owner'],$b['lease_fence']); $id=self::writeSource(null,'stage',$b,$source,$metadata,['kind'=>'draft','key'=>$b['idempotency_key'],'fingerprint'=>$fingerprint]); }
                 update_option($name,['kind'=>'draft','state'=>'pending','fingerprint'=>$fingerprint,'post_id'=>$id],false);
                 self::lease($b['lease_owner'],$b['lease_fence']);
                 self::applySEO($id,$metadata,true);
@@ -662,7 +760,9 @@ final class SGNews_Publisher {
         if (is_wp_error($read)) {
             $data=$read->get_error_data(); $status=is_array($data)?($data['status']??null):null;
             if (!$new || $status!==404) { throw new RuntimeException('AIOSEO SEO row is unavailable; no guessed bootstrap is attempted.'); }
-            $request=new WP_REST_Request('POST','/aioseo/v1/post'); $request->set_body_params(['id'=>$id]);
+            $request=new WP_REST_Request('POST','/aioseo/v1/post');
+            $request->set_header('Content-Type','application/json');
+            $request->set_body(wp_json_encode(['id'=>$id]));
             $bootstrap=rest_do_request($request);
             if ($bootstrap->is_error() || $bootstrap->get_status()>=300) { throw new RuntimeException('AIOSEO supported new-row bootstrap failed.'); }
         }
@@ -692,12 +792,21 @@ final class SGNews_Publisher {
                 $canonicalName=self::canonicalName($s['common_slug'],$s['language']); $canonical=self::fresh($canonicalName);
                 $id=is_array($canonical)?(int)$canonical['post_id']:null;
                 if (get_post_meta($stage->ID,'_sgnews_publish_complete',true)==='yes') {
-                    $done=(int)get_post_meta($stage->ID,'_sgnews_published_id',true); $out=self::normalized($done);
-                    if ($out['source_sha256']!==$s['source_sha256']) { throw new RuntimeException('A newer canonical revision already exists; stale revision cannot replace it.'); }
-                    add_option($name,['kind'=>'publish','state'=>'complete','fingerprint'=>$fingerprint,'post_id'=>$done],'',false); return $out;
+                    $done=(int)get_post_meta($stage->ID,'_sgnews_published_id',true);
+                    // A previous-version interruption may have saved the completion marker first.
+                    if (!$done && is_array($op) && $op['state']==='pending' && $id===(int)$op['post_id']) { $done=$id; }
+                    if (!$done || $done!==$id) { throw new RuntimeException('Completed stage lacks a proven canonical publication mapping.'); }
+                    $out=self::normalized($done);
+                    if ($out['status']!=='publish' || $out['kind']!=='canonical' || $out['idempotency_key']!=='canonical:'.$b['idempotency_key']
+                        || $out['source_sha256']!==$s['source_sha256'] || $out['language']!==$s['language'] || $out['common_slug']!==$s['common_slug']
+                        || get_post_meta($done,'_sgnews_metadata',true)!==$metadata || get_post_meta($done,'_sgnews_audit_sha256',true)!==$b['audit_sha256']) { throw new RuntimeException('A newer or changed canonical revision already exists; stale revision cannot replace it.'); }
+                    update_post_meta($stage->ID,'_sgnews_published_id',$done);
+                    if ((int)get_post_meta($stage->ID,'_sgnews_published_id',true)!==$done) { throw new RuntimeException('Published canonical mapping could not be verified.'); }
+                    update_option($name,['kind'=>'publish','state'=>'complete','fingerprint'=>$fingerprint,'post_id'=>$done],false); return $out;
                 }
                 $pending=is_array($op)?(int)$op['post_id']:null;
                 $recovered=self::recoverPost('canonical:'.$b['idempotency_key'],'canonical');
+                if (is_array($op) && !$pending && !$recovered) { throw new RuntimeException('Initial canonical creation is unproven; administrator inspection is required.'); }
                 if (!$id && $recovered) {
                     $id=$recovered; $pending=$recovered;
                     add_option($canonicalName,['post_id'=>$id],'',false);
@@ -706,6 +815,15 @@ final class SGNews_Publisher {
                 if (!$pending && $id!==$b['target_post_id']) { throw new RuntimeException('Target changed since this revision was staged.'); }
                 if ((int)get_post_meta($stage->ID,'_sgnews_target_id',true)!==(int)($b['target_post_id']??0)) { throw new RuntimeException('The stage was prepared for a different canonical target.'); }
                 if ($id) {
+                    $marker=get_post_meta($id,'_sgnews_initialization',true);
+                    if (is_array($marker) && ($marker['phase']??null)!=='complete') {
+                        if (!$pending || get_post_meta($id,'_sgnews_source_html',true)!==$s['content_raw']
+                            || get_post_meta($id,'_sgnews_source_sha256',true)!==$s['source_sha256'] || get_post_meta($id,'_sgnews_metadata',true)!==$metadata
+                            || get_post_meta($id,'_sgnews_language',true)!==$s['language']
+                            || (int)get_post_meta($id,'_sgnews_target_id',true)!==(int)($b['target_post_id']??0)) { throw new RuntimeException('Incomplete canonical source is not bound to this publication.'); }
+                        self::lease($b['lease_owner'],$b['lease_fence']);
+                        self::finishInitialization($id,'canonical','canonical:'.$b['idempotency_key'],$fingerprint);
+                    }
                     self::managed($id,'canonical');
                     $baseline=get_post_meta($stage->ID,'_sgnews_target_source_sha256',true);
                     $current=get_post_meta($id,'_sgnews_source_sha256',true);
@@ -715,7 +833,7 @@ final class SGNews_Publisher {
                 $save=['idempotency_key'=>'canonical:'.$b['idempotency_key'],'language'=>$s['language'],'existing_id'=>$b['target_post_id']];
                 self::lease($b['lease_owner'],$b['lease_fence']);
                 if ($new) {
-                    $id=self::writeSource(null,'canonical',$save,$s['content_raw'],$metadata);
+                    $id=self::writeSource(null,'canonical',$save,$s['content_raw'],$metadata,['kind'=>'publish','key'=>$b['idempotency_key'],'fingerprint'=>$fingerprint]);
                     add_option($canonicalName,['post_id'=>$id],'',false);
                 }
                 $pendingRecord=['kind'=>'publish','state'=>'pending','fingerprint'=>$fingerprint,'post_id'=>$id,'new'=>$new || (bool)($op['new']??false) || ($recovered && get_post($id)->post_status==='draft' && !$b['target_post_id'])];
@@ -754,7 +872,10 @@ final class SGNews_Publisher {
                     $rollback();
                     throw $e;
                 }
-                update_post_meta($stage->ID,'_sgnews_publish_complete','yes'); update_post_meta($stage->ID,'_sgnews_published_id',$id);
+                update_post_meta($stage->ID,'_sgnews_published_id',$id);
+                if ((int)get_post_meta($stage->ID,'_sgnews_published_id',true)!==$id) { throw new RuntimeException('Published canonical mapping could not be verified.'); }
+                update_post_meta($stage->ID,'_sgnews_publish_complete','yes');
+                if (get_post_meta($stage->ID,'_sgnews_publish_complete',true)!=='yes') { throw new RuntimeException('Publication completion checkpoint could not be verified.'); }
                 update_option($name,['kind'=>'publish','state'=>'complete','fingerprint'=>$fingerprint,'post_id'=>$id],false);
                 return $out;
             });

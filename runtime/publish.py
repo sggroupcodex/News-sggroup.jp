@@ -80,6 +80,8 @@ from .workflow import Workflow, safe_error
 from .wordpress_publisher_adapter import PublicPageVerifier, ScopedPublisherAdapter
 from .wordpress_transport import WordPressError, WordPressTransport
 from .tool_transport import ToolWordPressTransport
+from .preflight_identity import (RECOVERY_PURPOSE, preflight_identities,
+                                 validate_preflight_origin, validate_recovery_reconciliations)
 
 
 def _private_json(path: Path, value: dict):
@@ -388,6 +390,94 @@ def _preflight_preview_proof(browser, binding: dict, post: dict, report: dict):
             "preview_report_sha256": hashlib.sha256(_preflight_bytes(report_path)).hexdigest()}
 
 
+def _preflight_origin_snapshot(path: Path, raw: bytes):
+    """Write once; preserve the exact failed journal bytes before recovery."""
+    digest = hashlib.sha256(raw).hexdigest()
+    snapshot = path.with_name(path.name + ".origin-" + digest + ".json")
+    if snapshot.exists() or snapshot.is_symlink():
+        if _preflight_bytes(snapshot) != raw:
+            raise WordPressError("preflight_origin_snapshot_changed")
+    else:
+        fd = os.open(snapshot, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "wb") as handle:
+            os.fchmod(handle.fileno(), 0o600)
+            handle.write(raw)
+            handle.flush()
+            os.fsync(handle.fileno())
+        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    return snapshot, digest
+
+
+def _preflight_recovery_origin(path: Path, journal: dict):
+    recovery = journal["recovery"]
+    snapshot = Path(recovery["origin_plan_path"])
+    expected = path.with_name(path.name + ".origin-" + recovery["origin_plan_sha256"] + ".json")
+    if (snapshot != expected or hashlib.sha256(_preflight_bytes(snapshot)).hexdigest() != recovery["origin_plan_sha256"]):
+        raise WordPressError("preflight_origin_snapshot_changed")
+    validate_preflight_origin(journal, _preflight_json(snapshot))
+
+
+def _preflight_begin_recovery(path: Path, journal: dict, current_identity: dict):
+    raw = _preflight_bytes(path)
+    snapshot = path.with_name(path.name + ".origin-" + hashlib.sha256(raw).hexdigest() + ".json")
+    journal["recovery"] = {"schema_version": 1, "purpose": RECOVERY_PURPOSE,
+        "identity": current_identity, "origin_plan_path": str(snapshot),
+        "origin_plan_sha256": hashlib.sha256(raw).hexdigest(), "payloads_sha256": fingerprint(journal["payloads"]),
+        "operation_keys": {language: journal["operations"][language]["key"] for language in ("ja", "en")},
+        "created_at": _preflight_time()}
+    preflight_identities(journal)  # Only the exact reviewed code pair; every other field unchanged.
+    validate_preflight_origin(journal, _preflight_json(path))
+    _preflight_origin_snapshot(path, raw)
+    _atomic_preflight_json(path, journal)
+
+
+def _preflight_reconcile_upgrade(adapter, binding: dict, path: Path, journal: dict, languages: dict):
+    """Reconcile BOTH original keys before any same-key retry or new peer POST."""
+    previous = journal.get("recovery_reconciliations")
+    if previous:
+        journal.setdefault("recovery_history", []).append(previous)
+    journal["recovery_reconciliations"] = {}
+    _atomic_preflight_json(path, journal)
+    slug = journal["identity"]["common_slug"]
+    decisions = {}
+    for language in ("ja", "en"):
+        operation, payload = journal["operations"][language], journal["payloads"][language]
+        result = adapter.reconcile(language, slug, operation["key"], None, payload)
+        matches = result.get("posts", [])
+        if result.get("complete") is not True or not isinstance(matches, list) or len(matches) > 1:
+            raise WordPressError("preflight_operation_needs_reconciliation", ambiguous_write=True)
+        known = operation.get("post_id")
+        if matches:
+            post = matches[0]
+            if known is not None and known != post.get("id"):
+                raise WordPressError("preflight_recovery_stage_identity_changed", ambiguous_write=True)
+            operation.update(status="saved", post_id=post["id"], receipt=post, saved_at=_preflight_time())
+            _atomic_preflight_json(path, journal)  # Retain known IDs even when exact validation fails.
+            _preflight_saved(language, languages[language], post, slug, operation["key"])
+            outcome, post_id = "complete", post["id"]
+        elif known is not None or operation["status"] == "saved":
+            raise WordPressError("preflight_recovery_known_stage_unreconciled", ambiguous_write=True)
+        elif result.get("safe_to_resume") is True and adapter.supports_idempotent_creates is True:
+            outcome, post_id = "safe_to_resume", None
+        elif result.get("definitive_absence") is True:
+            outcome, post_id = "definitive_absence", None
+        else:
+            raise WordPressError("preflight_operation_needs_reconciliation", ambiguous_write=True)
+        record = {"key": operation["key"], "runtime_binding": binding, "outcome": outcome,
+                  "post_id": post_id, "checked_at": _preflight_time(),
+                  "source_sha256": hashlib.sha256(payload["html"].encode()).hexdigest(),
+                  "metadata_sha256": fingerprint(payload["metadata"])}
+        journal["recovery_reconciliations"][language] = record
+        _atomic_preflight_json(path, journal)
+        decisions[language] = result
+    validate_recovery_reconciliations(journal)
+    return decisions
+
+
 def preflight(adapter: ScopedPublisherAdapter, binding: dict, args):
     """Persist/reconcile controlled draft probes; never authorize or publish.
 
@@ -416,18 +506,33 @@ def preflight(adapter: ScopedPublisherAdapter, binding: dict, args):
     payloads = {language: {"language": language, "html": languages[language]["html"],
         "metadata": languages[language]["metadata"], "categories": [258],
         "is_accessible_for_free": True, "status": "draft"} for language in ("ja", "en")}
-    keys = {language: fingerprint({**identity, "language": language, "operation": "draft",
-                                  "payload": payload}) for language, payload in payloads.items()}
     path = Path(args.plan).absolute()
     journal = None
     with _preflight_lock(path):
         if path.exists() or path.is_symlink():
             journal = _preflight_json(path)
-            if (not isinstance(journal, dict) or journal.get("identity") != identity
-                    or journal.get("payloads") != payloads or set(journal.get("operations", {})) != {"ja", "en"}
-                    or any(journal["operations"][language].get("key") != keys[language] for language in ("ja", "en"))):
+            try:
+                origin, active = preflight_identities(journal)
+                if journal["payloads"] != payloads:
+                    raise ValueError("changed_preflight_payload")
+                if active != identity:
+                    if not getattr(args, "recover_reviewed_bootstrap", False) or "recovery" in journal:
+                        raise ValueError("changed_preflight_binding")
+                    _preflight_begin_recovery(path, journal, identity)
+                    origin, active = preflight_identities(journal)
+                elif getattr(args, "recover_reviewed_bootstrap", False) and "recovery" not in journal:
+                    raise ValueError("bootstrap_recovery_not_required")
+                if "recovery" in journal:
+                    _preflight_recovery_origin(path, journal)
+                    validate_recovery_reconciliations(journal, require_complete=False)
+            except (ValueError, TypeError, KeyError):
                 raise WordPressError("preflight_plan_binding_mismatch")
+            keys = {language: journal["operations"][language]["key"] for language in ("ja", "en")}
         else:
+            if getattr(args, "recover_reviewed_bootstrap", False):
+                raise WordPressError("existing_bootstrap_recovery_plan_required")
+            keys = {language: fingerprint({**identity, "language": language, "operation": "draft",
+                                          "payload": payload}) for language, payload in payloads.items()}
             journal = {"identity": identity, "created_at": _preflight_time(), "payloads": payloads,
                 "structural_validation": structural, "publication_performed": False, "production_ready": False,
                 "operations": {language: {"key": keys[language], "status": "planned", "post_id": None}
@@ -437,6 +542,8 @@ def preflight(adapter: ScopedPublisherAdapter, binding: dict, args):
         _atomic_preflight_json(path, journal)
         posts = {}
         try:
+            recovery_decisions = (_preflight_reconcile_upgrade(adapter, binding, path, journal, languages)
+                                  if "recovery" in journal else {})
             for language in ("ja", "en"):
                 operation = journal["operations"][language]
                 payload = payloads[language]
@@ -445,7 +552,9 @@ def preflight(adapter: ScopedPublisherAdapter, binding: dict, args):
                     if type(operation.get("post_id")) is not int or operation["post_id"] <= 0:
                         raise WordPressError("preflight_saved_id_unverified")
                 elif operation["status"] != "planned":
-                    reconciliation = adapter.reconcile(language, slug, keys[language], None, payload)
+                    reconciliation = recovery_decisions.get(language)
+                    if reconciliation is None:
+                        reconciliation = adapter.reconcile(language, slug, keys[language], None, payload)
                     matches = reconciliation.get("posts", [])
                     if reconciliation.get("complete") is not True or len(matches) > 1:
                         raise WordPressError("preflight_operation_needs_reconciliation", ambiguous_write=True)
@@ -471,7 +580,8 @@ def preflight(adapter: ScopedPublisherAdapter, binding: dict, args):
                 saved = adapter.get_post(operation["post_id"])
                 _preflight_saved(language, languages[language], saved, slug, keys[language])
                 operation.update(saved_readback=saved, source_sha256=hashlib.sha256(saved["content_raw"].encode()).hexdigest(),
-                                 metadata_sha256=fingerprint(languages[language]["metadata"]), readback_at=_preflight_time())
+                                 metadata_sha256=fingerprint(languages[language]["metadata"]), readback_at=_preflight_time(),
+                                 readback_runtime_binding=binding)
                 _atomic_preflight_json(path, journal)
                 posts[language] = saved
             if posts["ja"]["id"] == posts["en"]["id"]:
@@ -583,6 +693,8 @@ def main(argv=None) -> int:
     probe.add_argument("--plan", required=True)
     probe.add_argument("--browser-artifacts", required=True)
     probe.add_argument("--chromium")
+    probe.add_argument("--recover-reviewed-bootstrap", action="store_true",
+                       help="Reconcile the existing bootstrap-409 plan across only the reviewed PHP0.1.1→0.1.2 fix; retain original keys")
     first = sub.add_parser("first-publish", help="Use the reviewed, bound controlled-first-publication permit; leaves ordinary scheduling paused")
     first.add_argument("--state", default="state/queue.sqlite3")
     first.add_argument("--revision-id", type=int, required=True)

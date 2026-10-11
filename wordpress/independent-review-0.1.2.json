@@ -1,0 +1,234 @@
+{
+  "schema_version": 1,
+  "purpose": "independent_review_of_final_expanded_publisher_0_1_2_and_frozen_runtime_recovery",
+  "reviewed_at": "2026-10-11T05:18:34.794040+00:00",
+  "reviewer": {
+    "kind": "AI",
+    "non_author_of_reviewed_changes": true,
+    "actual_human_review": false
+  },
+  "code_review_passed": true,
+  "confirmed_unresolved_blocking_findings": [],
+  "source_sha256": {
+    "wordpress/sggroup-news-publisher.php": "22656f369556a169bb048356bfb0f33bf02c77cb7b97d9c0ca3d9d1f11c42668",
+    "runtime/preflight_identity.py": "f7385ac61e25e37a89fc43db83b8519b02352703811322b5d66da9631f01dccf",
+    "runtime/state.py": "f24de36fef6b5a4f4a0edaa1e901f4f1e7325105b764805b97bf59e8c93bbf51",
+    "runtime/workflow.py": "616f7c8c94cae8c0db4c466b9b72207c9f02098cc969ab47532885b9efd24dd3",
+    "runtime/wordpress_transport.py": "afac250bcb2008ecc38390de35b3ca5a61cda800d73f49b9493e441b24aae8b8",
+    "runtime/wordpress_publisher_adapter.py": "ddcf57dd04d2aaa7b50b24921cb4dd1a1c9eb7acedab3755a186fe8fa7b9b42b",
+    "runtime/wpvibe_driver.js": "a632eafa7547faecbb38cda4f98e8eda0a7b91c5b25264dc6a62d3c8253e6785",
+    "runtime/publish.py": "c0dbe83bcfaf14438b305aadfc96062b1a4d6be9374497965219b6445ed3d177"
+  },
+  "test_source_sha256": {
+    "wordpress/test-lifecycle.php": "8594469b7c8f64fb39e301725004b2b4c91593d34d2d188cae3b6862b15942bb",
+    "wordpress/test-admin-setup.php": "ba2327f005cce29cc7dcfd5d37697715877cfa1d431d586a1bd77ff966911475",
+    "wordpress/test-sanitizer.php": "6a707229c5da8526835c8131b2ac7ff16ea85987bb03dfb119853e3a5f100a60",
+    "wordpress/test-transient-storage-faults.py": "43d1acbf0ddbcc7cf34044b742a1babbbd9e3f0f48bb29d52253aae47f191cad",
+    "runtime/tests/test_runtime_fault_review.py": "aa0eea9bab15cc4cc22ffbf116b0d2b503d79bc98d2c5e5920e038add86e60f7",
+    "runtime/tests/test_workflow.py": "c8db47fae5446a47b543699086ebf3b55d02af0f76f907417bc5bdc6309aec97",
+    "runtime/tests/test_publisher_adapter.py": "6b470234cd26e616d6c993613ff8e69573fcefbc614f17e8ff04208c56eb0d02",
+    "runtime/test_wordpress_transport.py": "08865468b0c46ae50c3420bd87514e921d288b69ba80a2e4717ff6ace2efbd9c",
+    "runtime/tests/test_first_publication.py": "e8420a9eb20f2e16215ef370697a9892b69de7109e4a480ee31c96594ccec73e",
+    "runtime/tests/test_preflight_cli.py": "caae5d655cdf7bd1d6097b245d5588ec5b5f21a5cf3fe2c47f134f54f35f0ceb",
+    "runtime/tests/test_publish_cli.py": "cb424cf63acf36ebb1e87da19ce6052a5d0e97c9f37d3a752e3cffabf3c472be",
+    "runtime/tests/test_wpvibe_driver.js": "e41e05b58201046070a5cea2912d969eea774c80126de3b8d8de26397488b97b"
+  },
+  "earlier_review_preserved_privately": true,
+  "prior_bootstrap_only_report_superseded": true,
+  "review_scope": [
+    {
+      "files": [
+        "wordpress/sggroup-news-publisher.php"
+      ],
+      "lines": [
+        509,
+        748
+      ],
+      "result": "passed",
+      "observations": [
+        "New creation intent is persisted and verified before core insertion. An unknown partial insertion retains an unresolved operation and does not claim safe absence or permit blind duplication.",
+        "An incomplete new draft may finish taxonomy only when the owned post, original operation fingerprint, exact saved core/source/metadata/target proof, immutable operation origin and recorded taxonomy phase match.",
+        "Complete posts retain strict category and language checks; manual drift is not repaired through initialization.",
+        "Pending operation lookup checks the owned managed or exactly initializing post before granting same-operation recovery. A surviving mutation barrier blocks automatic resumption.",
+        "The registered AIOSEO bootstrap receives actual application/json bytes while normal route/object permission checks and exact SEO readback remain active."
+      ]
+    },
+    {
+      "files": [
+        "wordpress/sggroup-news-publisher.php"
+      ],
+      "lines": [
+        774,
+        879
+      ],
+      "result": "passed",
+      "observations": [
+        "Canonical initialization remains private until taxonomy and SEO verification complete. Existing public content retains its staged-update protection.",
+        "The verified canonical mapping is written before the completion marker. Exceptions after either mapping or marker permit recovery of the same publication.",
+        "Legacy completion-before-mapping repair requires the exact pending operation, canonical mapping, published status, source, language, metadata and audit binding. Changed or newer canonical revisions are rejected."
+      ]
+    },
+    {
+      "files": [
+        "wordpress/sggroup-news-publisher.php"
+      ],
+      "lines": [
+        889,
+        956
+      ],
+      "result": "passed",
+      "observations": [
+        "Anonymous managed source rendering and scoped head/schema processing use intact local saved state; they do not call connector REST or SEO abilities.",
+        "The frontend regression covers both languages with simulated unavailable connector/ability dispatch and absent author capabilities. This is a local PHP double, not a live frontend certification."
+      ]
+    },
+    {
+      "files": [
+        "runtime/preflight_identity.py",
+        "runtime/publish.py",
+        "runtime/state.py"
+      ],
+      "result": "passed",
+      "observations": [
+        "The original failed preflight identity, payloads and operation derivation remain immutable. The active verification binding accepts only the explicitly reviewed original-to-final candidate transition.",
+        "The exact original private journal bytes are preserved and checked. Both original operations are reconciled before any same-operation retry or peer submission; unknown, conflicting or changed outcomes stop mutation.",
+        "Truthful initial pending/absent observations remain intact. Final current-runtime saved readbacks and exact source-bound preview artifacts determine completed preflight validity.",
+        "The permit preserves mandatory immutable content, source-bound actual preview, readiness and fresh capacity checks; recovery does not open hourly publication gates."
+      ]
+    },
+    {
+      "files": [
+        "runtime/state.py",
+        "runtime/workflow.py",
+        "runtime/wordpress_transport.py",
+        "runtime/wordpress_publisher_adapter.py",
+        "runtime/wpvibe_driver.js"
+      ],
+      "result": "passed",
+      "observations": [
+        "Recognized global outages stop the remaining queue and create a persistent cooldown scoped to the execution context and exact current runtime binding. Reopening the state store preserves the deadline.",
+        "Known request timeout, rate limit, server error, connection/body-read failure, incomplete chunked read, bridge timeout and connector errors retain safe typed handling. The standard Retry-After delta/date is sanitized; a missing or invalid hint uses the conservative fallback.",
+        "A submitted mutation with an uncertain response remains ambiguous. Transport code performs no automatic HTTP retry or POST replay; recovery after the cooldown reconciles the original operation.",
+        "A cooldown blocks controlled first publication before its capacity receipt is consumed.",
+        "Article-local content defects and known absence/conflicts retain local classification. Already-published checkpoints survive public verification outages and resume fresh QA without publication replay."
+      ]
+    },
+    {
+      "files": [
+        "runtime/wpvibe_driver.js"
+      ],
+      "lines": [
+        89,
+        163
+      ],
+      "result": "passed",
+      "observations": [
+        "Only the exact observed usage notice may be removed from the end of one text block, followed by full JSON parsing. Unknown prose, HTML wrappers, duplicate notices, invalid counts, truncation and explicit errors remain rejected.",
+        "The recovery switch is a duplicate-protected boolean scoped to the preflight command."
+      ]
+    }
+  ],
+  "validation": [
+    {
+      "command": "python -m unittest runtime.tests.test_runtime_fault_review runtime.tests.test_workflow runtime.tests.test_publisher_adapter runtime.test_wordpress_transport runtime.tests.test_first_publication runtime.tests.test_preflight_cli runtime.tests.test_publish_cli -q",
+      "passed": true,
+      "tests": 132,
+      "runtime_fault_cases_included": 16,
+      "scope": "Offline transport/browser/queue fixtures; not live CMS evidence"
+    },
+    {
+      "command": "docker run --rm --network none -v /workspace/sggroup-news-automation:/app:ro -w /app php:8.3-cli php wordpress/test-lifecycle.php",
+      "passed": true,
+      "tests": 127,
+      "scope": "WordPress storage/API doubles"
+    },
+    {
+      "command": "docker run --rm --network none -v /workspace/sggroup-news-automation:/app:ro -w /app php:8.3-cli php wordpress/test-admin-setup.php",
+      "passed": true,
+      "tests": 99,
+      "scope": "Administrator GUI/API doubles; no live installation or capability changes"
+    },
+    {
+      "command": "docker run --rm --network none -v /workspace/sggroup-news-automation:/app:ro -w /app php:8.3-cli php wordpress/test-sanitizer.php",
+      "passed": true,
+      "tests": 45,
+      "scope": "Actual PHP DOM/CSS parser; not production rendering"
+    },
+    {
+      "command": "python wordpress/test-transient-storage-faults.py",
+      "passed": true,
+      "tests": 11,
+      "scope": "Maintained PHP doubles with injected one-shot storage and connector faults in cached Docker network-none/read-only environment"
+    },
+    {
+      "command": "docker run --rm --network none -v /workspace/sggroup-news-automation:/app:ro -w /app php:8.3-cli php -l wordpress/sggroup-news-publisher.php",
+      "passed": true
+    },
+    {
+      "command": "node runtime/tests/test_wpvibe_driver.js",
+      "passed": true,
+      "tests": 20,
+      "network_calls": 0
+    },
+    {
+      "description": "Fresh independent pure-parser boundary checks under the final driver binding",
+      "passed": true,
+      "tests": 27,
+      "network_calls": 0
+    },
+    {
+      "description": "Fresh local parse of the saved actual successful connector response under the final driver binding",
+      "passed": true,
+      "complete_json_payload_preserved": true,
+      "response_body_included": false,
+      "network_calls": 0
+    },
+    {
+      "description": "Fresh independent actual offline preflight producer output consumed by the permit validator under the final source bindings",
+      "passed": true,
+      "truthful_initial_pending_and_absent_receipts_preserved": true,
+      "original_payload_and_operation_derivation_preserved": true,
+      "negative_cases_rejected": 12,
+      "negative_cases": [
+        "unreviewed code",
+        "changed connection",
+        "changed actor",
+        "changed payload",
+        "changed operation derivation",
+        "missing peer reconciliation",
+        "unfinished saved status",
+        "missing current readback binding",
+        "changed saved content",
+        "changed preview binding",
+        "changed saved snapshot bytes",
+        "changed original journal bytes"
+      ],
+      "test_only": true,
+      "network_calls": 0
+    }
+  ],
+  "previously_identified_blocker": {
+    "priority": "P2",
+    "problem": "The permit confused initial pre-retry pending/absent observations with final completion, rejecting a successful recovered journal.",
+    "status": "resolved in the reviewed final state source",
+    "verified_by": "Actual offline producer-to-consumer success and current artifact/binding rejection checks; original observations remain truthful."
+  },
+  "execution_limits": [
+    "Tests using transport/browser/WordPress doubles are explicitly synthetic and do not attest real account grants, installed code, production database atomicity, native live rendering or publication.",
+    "The cached actual WordPress REST request reproduction from the earlier review establishes JSON-vs-form parsing, not production AIOSEO execution.",
+    "Unknown partial initialization, corrupt mapping, conflicting stored proof or a surviving hard-crash mutation barrier intentionally requires inspection rather than blind recreation.",
+    "The prior narrow bootstrap-only diff statement does not describe this expanded final candidate. All final code bindings above are required for this review."
+  ],
+  "not_attested": [
+    "Live installation and account permissions.",
+    "Actual production AIOSEO and same-operation recovery.",
+    "Live saved-theme/browser results or public canonical/hreflang/schema verification.",
+    "Actual publication, production MySQL hook/concurrency behavior or hourly scheduling readiness."
+  ],
+  "cms_api_auth_role_mutations_by_reviewer": 0,
+  "network_calls_by_reviewer": 0,
+  "full_publication_certification": false,
+  "scheduling_readiness_certification": false,
+  "publication_authorized_by_this_report": false,
+  "public_safe": true
+}

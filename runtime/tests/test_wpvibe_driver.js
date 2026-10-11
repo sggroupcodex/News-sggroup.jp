@@ -18,6 +18,8 @@ const request = (method = "GET") => ({version: 1, type: "request", id: uuid, sit
   method, endpoint: method === "GET" ? "/wp/v2/users/me" : "/sgnews-publisher/v1/articles/draft",
   params: method === "GET" ? {context: "edit"} : {}, payload: method === "GET" ? null : {author: 5, categories: [258], html: "正常"}, max_response_bytes: 8388608});
 const success = data => ({content: [{type: "text", text: JSON.stringify(data)}], isError: false});
+const usageFooter = (used = 50, limit = 100) => `\n\nWPVibe usage: your account has used ${used} of its ${limit} calls in the current rolling 24-hour window. Nothing is blocked yet, and earlier calls free up as they age past 24 hours, but a large batch may reach the limit. Details: https://mcp.wpvibe.ai/account`;
+const withUsage = (data, suffix = usageFooter()) => ({content: [{type: "text", text: JSON.stringify(data) + suffix}], isError: false});
 const args = ["--route", "query", "--context", "wpvibe:sggroup.jp:author-5", "--connection-revision", "observed-offline-test", "authenticate"];
 
 check("Unicode/base64 round trip including astral text and shell metacharacters", () => {
@@ -43,9 +45,15 @@ check("strict route/user/site/category and sensitive-field rejection", () => {
 check("CLI owner/bridge/config override and duplicated options refused", () => {
   helpers.argumentsValid(args);
   helpers.argumentsValid([...args.slice(0, -1), "preflight", "--bundle", "/private/canonical.json", "--plan", "/private/plan.json", "--browser-artifacts", "/private/browser"]);
+  helpers.argumentsValid([...args.slice(0, -1), "preflight", "--recover-reviewed-bootstrap", "--bundle", "/private/canonical.json", "--plan", "/private/plan.json", "--browser-artifacts", "/private/browser"]);
   helpers.argumentsValid([...args.slice(0, -1), "first-publish", "--state", "/private/queue.sqlite3", "--revision-id", "1", "--bundle", "/private/audited.json", "--preflight-plan", "/private/plan.json", "--authorization-receipt", "/private/auth.json", "--capacity-receipt", "/private/capacity.json", "--browser-artifacts", "/private/browser"]);
   assert.throws(() => helpers.argumentsValid([...args.slice(0, -1), "preflight", "--publish", "true"]));
   assert.throws(() => helpers.argumentsValid([...args.slice(0, -1), "first-publish", "--force", "true"]));
+  for (const command of ["authenticate", "diagnose", "canonicalize", "first-publish", "execute"])
+    assert.throws(() => helpers.argumentsValid([...args.slice(0, -1), command, "--recover-reviewed-bootstrap"]));
+  assert.throws(() => helpers.argumentsValid([...args.slice(0, -1), "--recover-reviewed-bootstrap", "preflight"]));
+  assert.throws(() => helpers.argumentsValid([...args.slice(0, -1), "preflight", "--recover-reviewed-bootstrap", "--recover-reviewed-bootstrap"]));
+  assert.throws(() => helpers.argumentsValid([...args.slice(0, -1), "preflight", "--recover-reviewed-bootstrap", "true"]));
   for (const extra of [["--expected-user-id", "1"], ["--transport", "direct"], ["--bridge-dir", "/tmp/evil"],
     ["--config", "/tmp/evil"], ["--route", "pretty"], ["diagnose"], ["--authorization", "hidden"]])
     assert.throws(() => helpers.argumentsValid([...args.slice(0, -1), ...extra, "authenticate"]));
@@ -54,6 +62,22 @@ check("strict full JSON preserves complete large language/source response", () =
   const data = {id: 5, html: "<p>日本語 ' `$(false)` 😀</p>".repeat(18000), quote: '\"\\\n'};
   const parsed = helpers.parseTool(success(data), "GET");
   assert.equal(parsed.ok, true); assert.deepEqual(JSON.parse(JSON.stringify(parsed.data)), data);
+});
+check("observed connector usage notice preserves full Unicode JSON and arrays", () => {
+  for (const data of [{id: 5, html: "日本語😀".repeat(35000)}, [{id: 5}]]) {
+    const parsed = helpers.parseTool(withUsage(data), "POST");
+    assert.equal(parsed.ok, true); assert.deepEqual(JSON.parse(JSON.stringify(parsed.data)), data);
+  }
+});
+check("usage lookalikes and malformed payloads cannot bypass full JSON checks", () => {
+  const suffixes = [usageFooter(-1), usageFooter(101), usageFooter(50, 0), usageFooter("9007199254740993", "9007199254740993"),
+    usageFooter().replace("mcp.wpvibe.ai", "other.invalid"), usageFooter() + "\nunknown", usageFooter() + usageFooter()];
+  for (const suffix of suffixes) assert.equal(helpers.parseTool(withUsage({id: 5}, suffix), "POST").ok, false);
+  for (const prefix of ['<html>{"id":5}</html>', '{"id":5', '{"id":5}\nunknown'])
+    assert.equal(helpers.parseTool({content: [{type: "text", text: prefix + usageFooter()}]}, "POST").ok, false);
+  for (const response of [{...withUsage({id: 5}), isError: true}, {...withUsage({id: 5}), truncated: true},
+    withUsage({code: "rest_forbidden", data: {status: 403}}), withUsage({id: 5, truncated: true})])
+    assert.equal(helpers.parseTool(response, "POST").ok, false);
 });
 check("HTML, unknown footer, truncation and tool errors fail closed", () => {
   for (const value of [{content: [{type: "text", text: '<html><script type="application/ld+json">{"id":5}</script></html>'}]},
@@ -67,10 +91,11 @@ check("HTML, unknown footer, truncation and tool errors fail closed", () => {
   }
 });
 check("explicit REST client rejection differs from unknown/429/server response", () => {
-  for (const status of [401, 403, 404, 429, 500]) {
+  for (const status of [401, 403, 404, 408, 429, 500]) {
     const result = helpers.parseTool({isError: true, content: [{type: "text", text: `REST API error (${status}):\n<private body>`}]}, "POST");
     assert.equal(result.error.status, status);
-    assert.equal(result.error.ambiguous_write, status >= 500 || status === 429);
+    assert.equal(result.error.ambiguous_write, status >= 500 || status === 429 || status === 408);
+    assert.equal(result.error.retryable, status >= 500 || status === 429 || status === 408);
     assert(!JSON.stringify(result).includes("private body"));
   }
 });
@@ -81,7 +106,7 @@ check("remote oversize and output-body/credential redaction rejected", () => {
     assert.throws(() => helpers.outputSafe(value));
 });
 
-async function integration({post = false, malformed = false, repeated = false, deadOwner = false, toolThrows = false} = {}) {
+async function integration({post = false, malformed = false, repeated = false, deadOwner = false, toolThrows = false, usage = false} = {}) {
   let dir, raw, document, toolCalls = 0, written, commandMax = 0;
   const data = {id: 5, content_raw: "<style>p{content:'`$(false)`';}</style><p>日本語😀</p>".repeat(7000)};
   const commandLogs = [];
@@ -121,7 +146,7 @@ async function integration({post = false, malformed = false, repeated = false, d
       if (post) assert.deepEqual(JSON.parse(parameters.body), document.payload);
       assert(!("headers" in parameters)); assert(!("auth" in parameters));
       if (toolThrows) throw Error("private remote message");
-      return success(data);
+      return usage ? withUsage(data) : success(data);
     }
   };
   const context = runtime(tools);
@@ -180,6 +205,8 @@ async function main() {
   for (const [name, options] of [
     ["full private FILE GET response >128KiB", {}],
     ["full private FILE POST body/response >128KiB exact and single dispatch", {post: true}],
+    ["usage-warning GET transports the complete response", {usage: true}],
+    ["usage-warning POST transports the complete response without retry", {post: true, usage: true}],
     ["malformed private request has no remote dispatch", {malformed: true}],
     ["dead Python waiter has no remote dispatch", {deadOwner: true}],
     ["repeated request never replays POST", {post: true, repeated: true}],

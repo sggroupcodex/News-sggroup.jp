@@ -1,0 +1,197 @@
+{
+  "schema_version": 1,
+  "review_kind": "independent_local_fault_review",
+  "execution_mode": "offline",
+  "test_only": true,
+  "completed_at": "2026-10-11T05:14:36.670057+00:00",
+  "reviewers": [
+    "/root/monitor_review",
+    "/root/monitor_review/plugin_fault_review"
+  ],
+  "claim_scope": "Independent source review and synthetic offline failure injection; not a live CMS, theme, MySQL-concurrency, schedule, or publication attestation.",
+  "plugin_version_in_reviewed_source": "0.1.2",
+  "original_plugin_sha256": "2092641bb873201a938863a40e1283c5a1ef845374dd488cf34dc53223945374",
+  "source_and_test_manifest": {
+    "wordpress/sggroup-news-publisher.php": "22656f369556a169bb048356bfb0f33bf02c77cb7b97d9c0ca3d9d1f11c42668",
+    "runtime/state.py": "f24de36fef6b5a4f4a0edaa1e901f4f1e7325105b764805b97bf59e8c93bbf51",
+    "runtime/workflow.py": "616f7c8c94cae8c0db4c466b9b72207c9f02098cc969ab47532885b9efd24dd3",
+    "runtime/wordpress_transport.py": "afac250bcb2008ecc38390de35b3ca5a61cda800d73f49b9493e441b24aae8b8",
+    "runtime/wordpress_publisher_adapter.py": "ddcf57dd04d2aaa7b50b24921cb4dd1a1c9eb7acedab3755a186fe8fa7b9b42b",
+    "runtime/tests/test_runtime_fault_review.py": "aa0eea9bab15cc4cc22ffbf116b0d2b503d79bc98d2c5e5920e038add86e60f7",
+    "wordpress/test-transient-storage-faults.py": "43d1acbf0ddbcc7cf34044b742a1babbbd9e3f0f48bb29d52253aae47f191cad",
+    "runtime/tool_transport.py": "58da44bbcf71b3fa67fa4578577797ee81e0d3011e748b377cf86ddab402dd20",
+    "runtime/wpvibe_driver.js": "a632eafa7547faecbb38cda4f98e8eda0a7b91c5b25264dc6a62d3c8253e6785",
+    "wordpress/test-lifecycle.php": "8594469b7c8f64fb39e301725004b2b4c91593d34d2d188cae3b6862b15942bb"
+  },
+  "findings": [
+    {
+      "id": "RF001",
+      "severity": "P2",
+      "status": "resolved_and_retested",
+      "component": "PHP first source initialization",
+      "trigger": "A one-shot language-term assignment failure occurs after a stage or canonical post was inserted.",
+      "before": "The surviving post failed strict managed-post validation on operation lookup and identical-key retry, even after storage recovered.",
+      "after": "A durable initialization intent and a narrowly source-bound pending-initialization recovery path repair the same post; immutable completed-post validation still rejects tampering.",
+      "regression": "stage_terms and canonical_terms fault scenarios; one original post and one original operation key"
+    },
+    {
+      "id": "RF002",
+      "severity": "P2",
+      "status": "resolved_and_retested",
+      "component": "PHP public completion checkpoints",
+      "trigger": "A post-meta hook throws after a completion/mapping checkpoint was saved, leaving a partial checkpoint.",
+      "before": "The public canonical could already exist while identical-key retry normalized a missing published ID as zero and failed permanently.",
+      "after": "The canonical ID is written and verified before the completion marker; source-bound canonical discovery recovers the old marker-first form without creating another article.",
+      "regression": "both checkpoint interruption points and legacy marker-first scenario"
+    },
+    {
+      "id": "RF003",
+      "severity": "P2",
+      "status": "resolved_and_retested",
+      "component": "Native queue and durable transport cooldown",
+      "trigger": "Three independent queued events encounter the same global 429 or network outage.",
+      "before": "The queue made three failed service probes in one run, retained no durable Retry-After deadline, and repeated the probes when reopened.",
+      "after": "A known global outage stops the batch. SQLite stores a deadline bound to the exact runtime binding and execution context; another worker sees it, and one fresh probe is permitted after expiry. Independent article defects still allow later events.",
+      "regression": "batch stop, SQLite reopen, deadline expiry, binding/context isolation, malformed hint fallback, independent-story continuation"
+    },
+    {
+      "id": "RF004",
+      "severity": "P2",
+      "status": "resolved_and_retested",
+      "component": "Direct HTTP timeout classification",
+      "trigger": "A submitted POST receives HTTP 408.",
+      "before": "The direct transport marked the write definitive and nonretryable, so the workflow did not require ambiguous-operation reconciliation.",
+      "after": "408 is retryable and the submitted write remains ambiguous; the transport issues exactly one request and leaves recovery to the operation ledger.",
+      "regression": "direct_http_408_keeps_a_submitted_mutation_ambiguous"
+    },
+    {
+      "id": "RF005",
+      "severity": "P2",
+      "status": "resolved_and_retested",
+      "component": "Response-body connection loss",
+      "trigger": "Successful HTTP 200 headers are followed by a body-read timeout or truncated chunked body.",
+      "before": "The status-200 timeout was omitted from global-outage classification; IncompleteRead escaped the typed error paths entirely.",
+      "after": "Both direct and anonymous public reads yield a sanitized retryable response_read_failed error. A POST remains ambiguous; an anonymous GET does not invent a mutation uncertainty.",
+      "regression": "actual fake-opener timeout and IncompleteRead in both read paths; committed-publication recovery on the original key"
+    },
+    {
+      "id": "RF006",
+      "severity": "P2",
+      "status": "resolved_and_retested",
+      "component": "Known connector failure with unknown HTTP outcome",
+      "trigger": "The reviewed connector driver yields a known tool-error code with no authoritative status and a legacy false retryable flag.",
+      "before": "The queue continued probing once per event.",
+      "after": "Recognized unavailable/unknown connector errors stop the batch with a conservative 300-second persisted wait. Unknown status is preserved, facts are retained, and no write absence is inferred. A known 409 remains local.",
+      "regression": "legacy execution failure and unknown wpvibe_tool_error scenarios"
+    },
+    {
+      "id": "RF007",
+      "severity": "P2",
+      "status": "resolved_and_retested",
+      "component": "Anonymous public-site verification",
+      "trigger": "The CMS API works and both language posts are already public, but the anonymous public site has a connection failure, 408, 429 or 5xx response.",
+      "before": "The verifier returned an article-local false result and the queue continued to further stories.",
+      "after": "Recognized public transport outages use the same persisted circuit. Both public IDs/checkpoints survive; after expiry, fresh public QA completes without another publish. HTTP 200 content/schema defects and a known missing article remain local.",
+      "regression": "typed GET failure matrix and full queue/reopen/public readback recovery scenario"
+    }
+  ],
+  "validation": {
+    "independent_native_fault_tests": {
+      "passed": true,
+      "tests": 16,
+      "command": "python -m unittest runtime.tests.test_runtime_fault_review -q",
+      "scenarios": [
+        "test_global_429_stops_batch_and_cooldown_survives_store_reopen",
+        "test_global_network_outage_stops_remaining_queue_attempts",
+        "test_story_local_failure_still_visits_other_independent_events",
+        "test_sanitized_failure_retains_safe_retry_deadline",
+        "test_direct_http_408_keeps_a_submitted_mutation_ambiguous",
+        "test_timeout_reading_a_success_response_is_a_global_connection_failure",
+        "test_http_date_retry_after_preserves_a_relative_wait",
+        "test_legacy_connector_execution_failure_stops_batch_despite_missing_retry_flag",
+        "test_unknown_connector_error_waits_without_relabeling_it_as_write_absence",
+        "test_cooldown_is_bound_to_execution_context_and_exact_connection",
+        "test_invalid_retry_after_cannot_disable_outage_cooldown",
+        "test_lost_committed_publication_resumes_original_key_after_cooldown",
+        "test_controlled_first_publication_cooldown_does_not_consume_capacity",
+        "test_public_fetch_outages_are_typed_but_content_defects_stay_local",
+        "test_truncated_chunked_body_is_retryable_in_both_direct_and_public_reads",
+        "test_public_site_outage_keeps_pair_and_rechecks_without_republication"
+      ]
+    },
+    "native_regression_group": {
+      "passed": true,
+      "tests": 85,
+      "command": "python -m unittest runtime.tests.test_runtime_fault_review runtime.tests.test_workflow runtime.tests.test_publisher_adapter runtime.test_wordpress_transport -q"
+    },
+    "independent_php_fault_tests": {
+      "passed": true,
+      "tests": 11,
+      "included_maintained_baseline_checks_at_least": 127,
+      "command": "python wordpress/test-transient-storage-faults.py",
+      "scenarios": [
+        "test_maintained_lifecycle_still_passes",
+        "test_stage_one_time_term_failure_recovers_same_post",
+        "test_canonical_one_time_term_failure_recovers_same_post",
+        "test_partial_completion_checkpoint_recovers_same_publication",
+        "test_partial_published_id_checkpoint_recovers_same_publication",
+        "test_legacy_marker_before_published_id_recovers_proven_canonical",
+        "test_unproven_first_write_stays_pending_and_never_duplicates",
+        "test_changed_retry_payload_is_rejected_without_duplicate",
+        "test_corrupt_pending_stage_is_never_resumable_or_replaced",
+        "test_completed_stage_taxonomy_is_not_repaired_as_initialization",
+        "test_published_frontend_survives_absent_connector_and_author_capabilities"
+      ],
+      "environment": {
+        "docker_image": "php:8.3-cli",
+        "image_sha256": "7855de8f54c32ffc92720b20b550f2dbc1c82c2000c7a850ccf350f71c36293f",
+        "network": "none",
+        "project_mount": "read-only",
+        "wordpress_and_aioseo": "local doubles, not a deployed installation"
+      }
+    },
+    "published_frontend_disconnection": {
+      "passed": true,
+      "method": "Run the actual plugin render, head and freeSchema functions after synthetic bilingual publication, with anonymous user, no author capabilities, mocked ability/REST functions that throw if called, and Docker network disabled.",
+      "checked": [
+        "exact stored source and source digest",
+        "scoped CSS",
+        "inline SVG",
+        "internal links",
+        "modeled locally stored SEO title and description",
+        "canonical",
+        "JA/EN/x-default alternates",
+        "SG Group author/publisher NewsArticle and free-access schema"
+      ],
+      "external_ability_calls": 0,
+      "external_rest_calls": 0,
+      "live_frontend_certified": false
+    },
+    "unknown_first_write": {
+      "passed": true,
+      "method": "Throw after the core post is inserted but before the operation-key metadata is fully saved, for stage and canonical first writes.",
+      "checked": [
+        "durable pending operation retained",
+        "safe_to_resume false",
+        "definitive_absence false",
+        "one original private post remains",
+        "identical retries do not create duplicates"
+      ]
+    }
+  },
+  "local_review_outcome": "No unresolved confirmed defect remains within the tested paths of these exact frozen sources.",
+  "limits": [
+    "No live WordPress/Polylang/AIOSEO/theme integration or MySQL multi-process concurrency test was performed.",
+    "Hard PHP termination can leave a non-expiring mutation barrier; safe recovery requires administrator inspection rather than automatic blind lock deletion.",
+    "The native SQLite ledger and transport cooldown coordinate only workers sharing this persistent file, exact binding, and execution context; they do not guarantee coordination across independent workspaces or unrelated connector clients.",
+    "A pending write whose saved result cannot be proved remains blocked rather than being blindly replayed.",
+    "After a first-publication attempt, a fresh measured capacity receipt and other applicable live proofs remain required before resuming.",
+    "Implementation tests do not establish live API quota, installation, current account identity, publication readiness, or hourly scheduling success."
+  ],
+  "live_api_invoked_by_review": false,
+  "production_state_changed_by_review": false,
+  "schedule_changed_by_review": false,
+  "public_content_changed_by_review": false,
+  "production_readiness_attested": false,
+  "hourly_operation_attested": false
+}

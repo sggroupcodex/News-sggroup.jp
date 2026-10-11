@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import hashlib
+from http.client import IncompleteRead
 from html.parser import HTMLParser
 import json
 import re
@@ -19,7 +20,8 @@ import urllib.parse
 import urllib.request
 import uuid
 
-from .wordpress_transport import MAX_RESPONSE_BYTES, WordPressError, WordPressTransport, _NoRedirect
+from .wordpress_transport import (MAX_RESPONSE_BYTES, WordPressError, WordPressTransport,
+                                  _NoRedirect, _retry_after_seconds)
 
 NAMESPACE = "/sgnews-publisher/v1"
 FEATURES = ("idempotent_creates", "fenced_leases", "exact_source_readback", "bilingual_publication_gate", "canonicalization")
@@ -176,12 +178,27 @@ class PublicPageVerifier:
         request = urllib.request.Request(expected, headers={"Accept": "text/html",
                                          "User-Agent": "SGGroupNewsPublicVerifier/1.0"})
         try:
-            with self._opener.open(request, timeout=25) as response:
-                data = response.read(MAX_RESPONSE_BYTES + 1)
-                if response.status != 200 or len(data) > MAX_RESPONSE_BYTES:
-                    return {"passed": False, "details": {"anonymous_http_200": False}}
+            response = self._opener.open(request, timeout=25)
+        except urllib.error.HTTPError as error:
+            response = error
         except (urllib.error.URLError, OSError, TimeoutError):
-            return {"passed": False, "details": {"anonymous_http_200": False}}
+            raise WordPressError("network_request_failed", retryable=True, ambiguous_write=False) from None
+        try:
+            with response:
+                status = response.status
+                if type(status) is int and (status in (408, 429) or 500 <= status <= 599):
+                    delay = _retry_after_seconds(getattr(response, "headers", {}).get("Retry-After", ""))
+                    details = {"retry_after_seconds": delay} if delay is not None else {}
+                    raise WordPressError("http_error", status=status, retryable=True,
+                                         ambiguous_write=False, details=details)
+                if status != 200:
+                    return {"passed": False, "details": {"anonymous_http_200": False}}
+                data = response.read(MAX_RESPONSE_BYTES + 1)
+                if len(data) > MAX_RESPONSE_BYTES:
+                    return {"passed": False, "details": {"anonymous_http_200": False}}
+        except (urllib.error.URLError, OSError, TimeoutError, IncompleteRead):
+            raise WordPressError("response_read_failed", status=getattr(response, "status", None),
+                                 retryable=True, ambiguous_write=False) from None
         try:
             page = data.decode("utf-8")
         except UnicodeDecodeError:

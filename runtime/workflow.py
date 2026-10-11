@@ -10,12 +10,14 @@ import argparse
 from datetime import date
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 from typing import Any, Protocol
 
 from .state import GateBlocked, LeaseLost, StateError, StateStore, canonical, fingerprint
 from .evidence import validate_article_evidence
+from .wordpress_transport import WordPressError
 
 LANGUAGES = ("ja", "en")
 META_KEYS = ("title", "aioseo_title", "aioseo_description", "slug")
@@ -75,10 +77,33 @@ def safe_error(exc: Exception) -> dict:
     # No request payload, authentication header or server error text in durable status.
     result = {"type": type(exc).__name__, "code": getattr(exc, "code", None),
               "http_status": getattr(exc, "status", None),
-              "ambiguous_write": getattr(exc, "ambiguous_write", None)}
+              "ambiguous_write": getattr(exc, "ambiguous_write", None),
+              "retryable": getattr(exc, "retryable", None)}
+    details = getattr(exc, "details", None)
+    delay = details.get("retry_after_seconds") if isinstance(details, dict) else None
+    try:
+        if type(delay) in (int, float) and math.isfinite(delay) and delay > 0:
+            result["retry_after_seconds"] = delay
+    except OverflowError:
+        pass
     if isinstance(exc, StateError):
         result["reason"] = str(exc)[:1000]  # Our local messages name the failed stage/check, never server text.
     return result
+
+
+def global_transport_failure(exc: Exception) -> bool:
+    """Only recognized publisher transport failures stop unrelated stories."""
+    if not isinstance(exc, WordPressError):
+        return False
+    code, status = exc.code, exc.status
+    # An unavailable connector or tool error without an authoritative HTTP status
+    # stops the batch even if a legacy driver omitted retryability. It never
+    # proves that a submitted write was absent.
+    if code in {"wpvibe_tool_exception", "wpvibe_tool_execution_failed", "wpvibe_tool_error"} and status is None:
+        return True
+    return (exc.retryable is True and
+            (type(status) is int and (status in (408, 429) or 500 <= status <= 599)
+             or code in {"network_request_failed", "response_read_failed", "bridge_response_timeout"}))
 
 
 class Workflow:
@@ -267,12 +292,21 @@ class Workflow:
 
     def _require_execution_ready(self, revision_id: int, db=None):
         self.store.require_ready(self.context, db)
+        self.store.require_transport_available(self.context, db)
+
+    def _record_transport_failure(self, exc: Exception):
+        if global_transport_failure(exc):
+            error = safe_error(exc)
+            error["retryable"] = True  # Effective retryability for recognized legacy connector throws.
+            return self.store.record_transport_cooldown(self.context, error)
+        return None
 
     def _prepare_stages(self, lease: dict, bundle: dict):
         pass
 
     def execute_first_publication(self, revision_id: int, owner: str, bundle: dict | None = None) -> dict:
         """One explicitly authorized initial pair, with ordinary hourly gates still blocked."""
+        self.store.require_transport_available(self.context)
         permit = self.store.require_first_publication_ready(revision_id, self.context)
         revision = self.store.revision(revision_id)
         candidate = bundle if bundle is not None else json.loads(revision["bundle_json"] or "null")
@@ -295,12 +329,16 @@ class Workflow:
 
     def execute(self, revision_id: int, owner: str, bundle: dict | None = None, *, owned_lease: dict | None = None) -> dict:
         self._require_execution_ready(revision_id)
-        if hasattr(self.transport, "verify_ready"):
-            self.transport.verify_ready()  # Refresh actual identity/route capabilities before inspecting supported flags.
-        if hasattr(self.transport, "runtime_binding"):
-            binding = self.transport.runtime_binding(self.context)
-            if binding != self.store.runtime_binding:
-                raise GateBlocked("actual current transport identity/connection differs from recorded readiness")
+        try:
+            if hasattr(self.transport, "verify_ready"):
+                self.transport.verify_ready()  # Refresh actual identity/route capabilities before inspecting supported flags.
+            if hasattr(self.transport, "runtime_binding"):
+                binding = self.transport.runtime_binding(self.context)
+                if binding != self.store.runtime_binding:
+                    raise GateBlocked("actual current transport identity/connection differs from recorded readiness")
+        except Exception as exc:
+            self._record_transport_failure(exc)
+            raise
         lease = owned_lease or self.store.acquire(revision_id, owner)
         if (lease["revision_id"] != revision_id or lease["owner"] != owner or
                 lease["event_key"] != self.store.revision(revision_id)["event_key"]):
@@ -425,6 +463,7 @@ class Workflow:
                                (state, stage, canonical(safe_error(exc)), self.store.clock(), revision_id))
             except LeaseLost:
                 pass
+            self._record_transport_failure(exc)
             raise
         finally:
             self.store.release(lease)
@@ -443,10 +482,16 @@ class Workflow:
         snapshot = self.store.status(self.context)["queue"]
         pending = [row for row in snapshot if row["state"] not in ("complete", "superseded_by_correction")]
         result = {"completed": [], "failures": [], "busy": [], "quiet_unchanged": not pending}
+        cooldown = self.store.transport_cooldown(self.context)
+        if cooldown is not None:
+            return {**result, "quiet_unchanged": False,
+                    "blocked": {"reason": "transport_cooldown", "retry_not_before": cooldown["retry_not_before"],
+                                "error": cooldown["error"]}}
         for item in pending:
             revision_id = item["id"]
             lease = None
             try:
+                self.store.require_transport_available(self.context)
                 lease = self.store.acquire(revision_id, owner)
                 revision = self.store.revision(revision_id)
                 public_side = any(self._checkpoint(revision_id, lang)["published"] for lang in LANGUAGES)
@@ -459,6 +504,11 @@ class Workflow:
                 result["busy"].append(revision_id)
             except Exception as exc:
                 result["failures"].append({"revision_id": revision_id, "error": safe_error(exc)})
+                if global_transport_failure(exc):
+                    cooldown = self.store.transport_cooldown(self.context) or self._record_transport_failure(exc)
+                    result["blocked"] = {"reason": "transport_cooldown", "retry_not_before": cooldown["retry_not_before"],
+                                         "error": cooldown["error"]}
+                    break
                 if isinstance(exc, GateBlocked):
                     break  # A global readiness/maintenance dependency stops publication.
             finally:
@@ -476,6 +526,7 @@ class _FirstPublicationWorkflow(Workflow):
     def _require_execution_ready(self, revision_id: int, db=None):
         if revision_id != self._first_lease["revision_id"]:
             raise GateBlocked("controlled first publication cannot switch revisions")
+        self.store.require_transport_available(self.context, db)
         return self.store.require_first_publication_ready(revision_id, self.context, db,
                                                           lease=self._first_lease)
 

@@ -8,13 +8,16 @@ economics, military affairs, geopolitics, politics, strategic chokepoints,
 security, and shipping/sea lanes. Research, significance decisions, original
 writing, complete translation, and semantic reviews remain agent tasks.
 
-**Scheduling is paused.** On 2026-10-11, installed plugin 0.1.0 and the
-Author user 5 dedicated capability/dependencies were verified through its real
-status API. Reviewed plugin 0.1.1 adds managed-News schema and head corrections
-and still requires an administrator's independent upload. The configured direct
-HTTP connection returns 401; native WPVibe execution reuses the existing connector
-without a second authorization secret. Actual saved-theme inspection and a
-controlled first publication remain pending.
+**Scheduling is paused.** On 2026-10-11, the actual installed plugin 0.1.1,
+Author user 5, dedicated capability and dependencies were verified. Both audited
+language fragments passed live canonicalization unchanged. The first private
+draft stopped with an AIOSEO JSON-bootstrap error; its original operation remains
+pending. Reviewed 0.1.2 repairs that request and partial-save/publication recovery,
+and requires the site administrator's independent replacement upload. The native
+WPVibe path is authenticated; the optional direct HTTP path returns 401.
+Saved-theme inspection, the controlled first public pair and hourly execution
+remain pending. The last observed free-plan balance was 49 calls; recovery,
+first publication and reserve together require an estimated 64 before starting.
 
 The automation must keep its existing Author user 5 connection. Do not connect
 an administrator account or elevate its role. The site administrator performs
@@ -48,7 +51,7 @@ copy viewer, with two complete HTML fragments and eight metadata targets.
 
 | Component | Purpose |
 | --- | --- |
-| `runtime/state.py` | Durable event/revision queue, source watermarks, readiness gates, fenced ownership, operation intents |
+| `runtime/state.py` | Durable event/revision queue, source watermarks, readiness gates, fenced ownership, operation intents and transport cooldowns |
 | `runtime/workflow.py` | Both saved drafts before publication, exact read-back, ambiguous-write reconciliation, corrections and partial recovery |
 | `runtime/wordpress_transport.py` | HTTPS transport preserving injected authorization, proxy and CA trust; no automatic write retries |
 | `runtime/tool_transport.py` | Private request/response bridge using the existing Author connector without handling its credentials |
@@ -82,6 +85,7 @@ php -l wordpress/sggroup-news-publisher.php
 php wordpress/test-sanitizer.php
 php wordpress/test-lifecycle.php
 php wordpress/test-admin-setup.php
+python wordpress/test-transient-storage-faults.py
 ```
 
 Chromium tests default to `/usr/bin/chromium`. See the browser module for its
@@ -143,6 +147,14 @@ viewports. It does not publish or enable automation. Unknown writes require
 the server's actual operation journal; an incomplete plan is resumed using its
 same keys instead of blindly creating drafts again.
 
+For the reviewed 0.1.1 to 0.1.2 AIOSEO bootstrap repair, `preflight
+--recover-reviewed-bootstrap` preserves the original operation identity, both
+keys and an exact private snapshot of the blocked 409 plan. It accepts only the
+fixed reviewed PHP hash pair with every other connection and payload field
+unchanged, and reconciles both original server operations before any draft POST.
+Fresh readback and theme previews bind the new code. This is an explicit narrow
+recovery transition; other code or connection changes still reject the plan.
+
 `first-publish` adopts only that exact verified pair and still requires all eight
 original article audits, the four prepublication deployment gates, a current
 receipt for the user's publication instruction, and fresh measured API quota
@@ -160,6 +172,10 @@ must fail closed; saved HTML, metadata and theme previews must be complete and
 match their expected hashes. An allowance is not evidence that the service
 accepted or returned the complete payload. A lost write response retains its
 operation key and requires server-journal reconciliation before retrying.
+The connector's exact observed rolling-quota warning may follow a successful
+JSON response in the same text block. The driver recognizes only that complete
+service notice with valid counts; it still rejects unknown text, HTML, truncated
+JSON, explicit errors and oversized responses without retrying a write.
 
 Verify API capacity before enabling production. The currently observed free
 plan allows 100 calls per rolling 24 hours. Budget live canonicalization and
@@ -171,6 +187,17 @@ Budget actual remaining calls, queued work
 and recovery headroom, and keep publication paused when capacity is insufficient.
 An unchanged or non-actionable monitoring run should make no WordPress calls
 and send no routine status notification.
+
+Recognized global transport failures stop the batch after its first failure.
+The runtime stores the cooldown in SQLite under the exact execution context and
+runtime binding, honors a valid Retry-After, and otherwise waits five minutes.
+Restarting the worker cannot bypass that deadline. HTTP408,429,5xx, network loss,
+body-read timeouts, incomplete bodies and status-less connector failures never
+prove that a submitted write was absent. Recovery reconciles the original
+operation key. A public-page outage retains already published IDs and resumes
+fresh public verification without republishing; an actual content defect remains
+an article-specific correction. Cooldown checks also precede first-publication
+capacity consumption. Readiness gates and the hourly pause remain separate.
 
 For native execution, the trusted `runtime/wpvibe_driver.js` is loaded in
 `functions.exec` and its `runWpvibe()` function drives the Python CLI and the
@@ -219,3 +246,23 @@ owned single managed News posts and their authenticated previews. It modifies
 AIOSEO's existing single Article graph and adds no extra JSON-LD script.
 Ordinary existing news and archives remain unchanged. Actual saved-preview and
 published-page head checks are mandatory even after the offline regressions pass.
+
+Plugin 0.1.2 supplies JSON to AIOSEO's registered new-row REST handler; the former
+form-only bootstrap failed on the site and was reproduced with the real WordPress
+request class. Normal permissions, scoped mutation and exact SEO readback remain
+required. A private initializer permits only an unchanged, proven partial draft
+to finish category/language assignment with its original payload and operation
+key. A pending creation intent is saved before post insertion: an unproven
+partial insert stays blocked rather than creating a duplicate. Publication saves
+and verifies the canonical ID before its completion flag; legacy partial flags
+require strict canonical/source/SEO reconciliation. Completed posts retain their
+strict taxonomy and source checks. Unknown writes and hard-crash mutation
+barriers require inspection rather than automatic clearing.
+
+The final local suite passed 172 runtime tests, nine direct-transport tests,
+20 driver tests, 271 PHP checks and 11 additional PHP fault tests. Independent
+fault probes include anonymous published rendering with no connector, no Author
+capabilities and Docker networking disabled; local source, CSS, SVG and scoped
+head/schema corrections remain available. These use WordPress/AIOSEO doubles,
+not the site's actual database/theme. Successful live saved SEO, native previews,
+public pages and scheduled execution remain separate requirements.

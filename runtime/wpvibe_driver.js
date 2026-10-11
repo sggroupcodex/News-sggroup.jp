@@ -100,21 +100,29 @@
       }
     }
     const write = method !== "GET";
-    return {code: "wpvibe_tool_error", status, retryable: status === 429 || (status !== null && status >= 500),
-      ambiguous_write: write && (status === null || status === 429 || status >= 500 || status >= 300 && status < 400)};
+    return {code: "wpvibe_tool_error", status, retryable: status === 408 || status === 429 || (status !== null && status >= 500),
+      ambiguous_write: write && (status === null || status === 408 || status === 429 || status >= 500 || status >= 300 && status < 400)};
   }
   function parseTool(result, method) {
     if (!plain(result) || result.isError === true || result.truncated === true ||
         plain(result.structuredContent) && (result.structuredContent.error_code || result.structuredContent.truncated === true))
       return {ok: false, error: toolError(result, method)};
     // Do not scan HTML or extract an arbitrary embedded object. A success must
-    // consist of one complete JSON text block, with no unknown usage footer.
+    // consist of one complete JSON text block. The connector appends this exact
+    // observed usage notice at its warning threshold; unknown suffixes still
+    // fail closed, and no JSON is extracted from HTML or arbitrary text.
     const content = result.content;
     if (!Array.isArray(content) || content.length !== 1 || content[0].type !== "text" || typeof content[0].text !== "string")
       return {ok: false, error: {code: "wpvibe_response_envelope_invalid", status: null, retryable: false, ambiguous_write: method !== "GET"}};
-    const raw = content[0].text.trim();
+    let raw = content[0].text.trim();
     if (!(raw.startsWith("{") || raw.startsWith("[")) || utf8(raw).length > LIMIT)
       return {ok: false, error: {code: "wpvibe_response_invalid_or_oversize", status: null, retryable: false, ambiguous_write: method !== "GET"}};
+    const usage = /\n\nWPVibe usage: your account has used ([0-9]+) of its ([0-9]+) calls in the current rolling 24-hour window\. Nothing is blocked yet, and earlier calls free up as they age past 24 hours, but a large batch may reach the limit\. Details: https:\/\/mcp\.wpvibe\.ai\/account$/.exec(raw);
+    if (usage) {
+      const used = Number(usage[1]), limit = Number(usage[2]);
+      if (Number.isSafeInteger(used) && Number.isSafeInteger(limit) && used >= 0 && limit > 0 && used <= limit)
+        raw = raw.slice(0, usage.index);
+    }
     let data;
     try { data = JSON.parse(raw); }
     catch (_) { return {ok: false, error: {code: "wpvibe_response_incomplete_or_nonjson", status: null, retryable: false, ambiguous_write: method !== "GET"}}; }
@@ -130,7 +138,7 @@
     const common = new Set(["--route", "--context", "--connection-revision", "--approved-plugin", "--publisher-code-sha256", "--publisher-policy-version"]);
     const commandFlags = {
       authenticate: new Set(), diagnose: new Set(), canonicalize: new Set(["--language", "--slug", "--input", "--output"]),
-      preflight: new Set(["--bundle", "--plan", "--browser-artifacts", "--chromium"]),
+      preflight: new Set(["--bundle", "--plan", "--browser-artifacts", "--chromium", "--recover-reviewed-bootstrap"]),
       "first-publish": new Set(["--state", "--revision-id", "--bundle", "--preflight-plan", "--authorization-receipt", "--capacity-receipt", "--browser-artifacts", "--chromium"]),
       execute: new Set(["--state", "--revision-id", "--bundle", "--browser-artifacts", "--chromium"])
     };
@@ -138,6 +146,10 @@
     for (let i = 0; i < args.length; i++) {
       const arg = args[i];
       if (Object.hasOwn(commandFlags, arg)) { if (command) throw fault("driver_duplicate_subcommand"); command = arg; continue; }
+      if (arg === "--recover-reviewed-bootstrap") {
+        if (command !== "preflight" || seen.has(arg)) throw fault("driver_cli_argument_rejected");
+        seen.add(arg); continue;
+      }
       if (seen.has(arg) || !(command ? commandFlags[command].has(arg) : common.has(arg)) || i + 1 >= args.length) throw fault("driver_cli_argument_rejected");
       seen.add(arg); const value = args[++i];
       if (value.startsWith("--")) throw fault("driver_cli_value_invalid");

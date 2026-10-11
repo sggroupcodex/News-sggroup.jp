@@ -39,6 +39,18 @@ class GateBlocked(StateError):
     pass
 
 
+class TransportCooldown(StateError):
+    """A persisted temporary transport outage, separate from readiness gates."""
+    code = "transport_cooldown"
+    retryable = True
+    ambiguous_write = False
+
+    def __init__(self, record: dict):
+        self.record = record
+        self.retry_not_before = record["retry_not_before"]
+        super().__init__("publication transport cooldown remains active")
+
+
 def canonical(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
@@ -102,6 +114,10 @@ class StateStore:
                 CREATE TABLE IF NOT EXISTS first_publication_attempts(
                     capacity_sha256 TEXT PRIMARY KEY, revision_id INTEGER NOT NULL REFERENCES revisions,
                     owner TEXT NOT NULL, fence INTEGER NOT NULL, started_at REAL NOT NULL);
+                CREATE TABLE IF NOT EXISTS transport_cooldowns(
+                    context TEXT NOT NULL, binding_digest TEXT NOT NULL, runtime_binding TEXT NOT NULL,
+                    retry_not_before REAL NOT NULL, recorded_at REAL NOT NULL, error TEXT NOT NULL,
+                    PRIMARY KEY(context,binding_digest));
                 CREATE TABLE IF NOT EXISTS sources(
                     source_key TEXT PRIMARY KEY, watermark REAL NOT NULL,
                     last_attempt_end REAL, last_error TEXT);
@@ -282,6 +298,68 @@ class StateStore:
             raise GateBlocked("; ".join(blockers))
 
 
+    def _transport_scope(self, context: str):
+        if (not isinstance(context, str) or not context
+                or not self.test_mode and (not isinstance(self.runtime_binding, dict) or not self.runtime_binding)):
+            raise StateError("exact runtime binding required for transport cooldown")
+        return context, fingerprint(self.runtime_binding), canonical(self.runtime_binding)
+
+    def transport_cooldown(self, context: str, db=None) -> dict | None:
+        if db is None:
+            with self.connect() as connection:
+                return self.transport_cooldown(context, connection)
+        scoped_context, digest, binding = self._transport_scope(context)
+        row = db.execute("SELECT * FROM transport_cooldowns WHERE context=? AND binding_digest=?",
+                         (scoped_context, digest)).fetchone()
+        if row is None or row["retry_not_before"] <= self.clock():
+            return None
+        if row["runtime_binding"] != binding:
+            raise StateError("transport cooldown binding mismatch")
+        return {"context": scoped_context, "runtime_binding": self.runtime_binding,
+                "retry_not_before": row["retry_not_before"], "recorded_at": row["recorded_at"],
+                "error": json.loads(row["error"])}
+
+    def require_transport_available(self, context: str, db=None):
+        record = self.transport_cooldown(context, db)
+        if record is not None:
+            raise TransportCooldown(record)
+
+    def record_transport_cooldown(self, context: str, error: dict, db=None) -> dict:
+        """Commit a confirmed global outage without changing queue facts or gates."""
+        if db is None:
+            with self.transaction() as connection:
+                return self.record_transport_cooldown(context, error, connection)
+        scoped_context, digest, binding = self._transport_scope(context)
+        if not isinstance(error, dict) or error.get("retryable") is not True:
+            raise StateError("confirmed retryable transport error required")
+        safe = {key: error.get(key) for key in ("type", "code", "http_status", "ambiguous_write", "retryable")}
+        delay = error.get("retry_after_seconds")
+        try:
+            valid_delay = type(delay) in (int, float) and math.isfinite(delay) and delay > 0
+        except OverflowError:
+            valid_delay = False
+        if valid_delay:
+            safe["retry_after_seconds"] = delay
+        else:
+            delay = 300  # No immediate probe/replay when a deadline is absent or malformed.
+        now = self.clock()
+        deadline = now + delay
+        if not math.isfinite(now) or not math.isfinite(deadline):
+            delay, deadline = 300, now + 300
+        if not math.isfinite(deadline):
+            raise StateError("finite transport cooldown deadline required")
+        previous = db.execute("SELECT retry_not_before FROM transport_cooldowns WHERE context=? AND binding_digest=?",
+                              (scoped_context, digest)).fetchone()
+        if previous:
+            deadline = max(deadline, previous["retry_not_before"])
+        db.execute("INSERT INTO transport_cooldowns VALUES(?,?,?,?,?,?) "
+                   "ON CONFLICT(context,binding_digest) DO UPDATE SET runtime_binding=excluded.runtime_binding,"
+                   "retry_not_before=excluded.retry_not_before,recorded_at=excluded.recorded_at,error=excluded.error",
+                   (scoped_context, digest, binding, deadline, now, canonical(safe)))
+        return {"context": scoped_context, "runtime_binding": self.runtime_binding,
+                "retry_not_before": deadline, "recorded_at": now, "error": safe}
+
+
     @staticmethod
     def _private_bytes(path: str | Path) -> bytes:
         """Read bounded, user-private evidence without following a symlink."""
@@ -362,9 +440,21 @@ class StateStore:
 
     def _first_plan(self, plan: dict, scope: dict) -> dict:
         from .evidence import WIDTHS, LANDSCAPES
-        if (plan.get("schema_version") != 1 or plan.get("purpose") != "controlled_private_bilingual_draft_preflight"
-                or plan.get("runtime_binding") != scope["runtime_binding"] or plan.get("bundle_digest") != scope["bundle_digest"]
-                or plan.get("common_slug") != scope["common_slug"] or plan.get("state") != "private_drafts_verified"
+        from .preflight_identity import (preflight_identities, validate_preflight_origin,
+                                         validate_recovery_reconciliations)
+        try:
+            identity, active_identity = preflight_identities(plan)
+            if "recovery" in plan:
+                recovery = plan["recovery"]
+                original, original_sha = self._private_record(recovery["origin_plan_path"])
+                if original_sha != recovery["origin_plan_sha256"]:
+                    raise GateBlocked("original bootstrap recovery journal changed")
+                validate_preflight_origin(plan, original)
+                validate_recovery_reconciliations(plan)
+        except (ValueError, KeyError, TypeError) as exc:
+            raise GateBlocked("preflight identity or reviewed bootstrap recovery is invalid") from exc
+        if (active_identity["runtime_binding"] != scope["runtime_binding"] or active_identity["bundle_digest"] != scope["bundle_digest"]
+                or active_identity["common_slug"] != scope["common_slug"] or plan.get("state") != "private_drafts_verified"
                 or plan.get("publication_performed") is not False or plan.get("production_ready") is not False
                 or plan.get("structural_validation", {}).get("passed") is not True
                 or plan.get("structural_validation", {}).get("errors") != []):
@@ -380,7 +470,6 @@ class StateStore:
         if set(payloads) != {"ja", "en"} or set(plan.get("operations", {})) != {"ja", "en"} or set(plan.get("previews", {})) != {"ja", "en"}:
             raise GateBlocked("complete bilingual preflight required")
         languages, stages = {}, {}
-        identity = {key: plan[key] for key in ("schema_version", "purpose", "runtime_binding", "bundle_digest", "common_slug")}
         for language in ("ja", "en"):
             payload = payloads[language]
             if (not isinstance(payload, dict) or set(payload) != {"language", "html", "metadata", "categories", "is_accessible_for_free", "status"}
@@ -398,6 +487,8 @@ class StateStore:
                     or operation.get("source_sha256") != source or operation.get("metadata_sha256") != fingerprint(payload["metadata"])):
                 raise GateBlocked("preflight saved operation identity incomplete")
             post = operation.get("saved_readback", {})
+            if "recovery" in plan and operation.get("readback_runtime_binding") != active_identity["runtime_binding"]:
+                raise GateBlocked("recovered CMS readback does not bind the current verified publisher")
             metadata = payload["metadata"]
             expected = {"id": operation["post_id"], "status": "draft", "language": language, "author": 5,
                         "kind": "stage", "idempotency_key": key, "source_sha256": source,
@@ -527,6 +618,7 @@ class StateStore:
         if db is None:
             with self.connect() as connection:
                 return self.require_first_publication_ready(revision_id, context, connection, lease=lease)
+        self.require_transport_available(context, db)
         row = db.execute("SELECT * FROM first_publication_permit WHERE singleton=1").fetchone()
         if not row or row["revision_id"] != revision_id or row["status"] not in ("pending", "active"):
             raise GateBlocked("sole initial-publication permit unavailable")
@@ -739,9 +831,11 @@ class StateStore:
             posts = [dict(r) for r in db.execute("SELECT * FROM posts ORDER BY event_key,language")]
             operations = [dict(r) for r in db.execute("SELECT operation_key,revision_id,language,stage,status,error,updated_at "
                                                       "FROM operations WHERE status!='succeeded' ORDER BY updated_at")]
+            cooldown = self.transport_cooldown(context, db) if self.runtime_binding is not None or self.test_mode else None
             return {"storage_scope": "one persistent SQLite workspace; all workers must share this file",
                     "database": str(self.path.resolve()), "context": context, **settings,
                     "gate_blockers": self.gate_blockers(context, db), "queue": queue,
                     "sources": sources, "posts": posts, "unresolved_operations": operations,
-                    "ready_for_workflow": not settings["paused"] and not self.gate_blockers(context, db),
+                    "transport_cooldown": cooldown,
+                    "ready_for_workflow": not settings["paused"] and not self.gate_blockers(context, db) and cooldown is None,
                     "hourly_schedule_readiness": "requires separately verified controlled publication and actual schedule execution"}

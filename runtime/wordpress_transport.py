@@ -17,8 +17,12 @@ used to recover an ambiguous create by blindly creating another post.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 import hashlib
+from http.client import IncompleteRead
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -35,6 +39,24 @@ POST_FIELDS = (
     "id,status,author,categories,slug,title,content,link,date_gmt,modified_gmt,"
     "sg-group-language-controller"
 )
+
+
+def _retry_after_seconds(value: str) -> int | None:
+    """A safe positive delta from either standard Retry-After header form."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    try:
+        if value.isdigit() and len(value) <= 20:
+            delay = int(value)
+        else:
+            until = parsedate_to_datetime(value)
+            if until.tzinfo is None:
+                return None
+            delay = math.ceil((until - datetime.now(timezone.utc)).total_seconds())
+        return delay if delay > 0 and math.isfinite(delay) else None
+    except (TypeError, ValueError, OverflowError):
+        return None
 
 
 class WordPressError(RuntimeError):
@@ -151,7 +173,7 @@ class WordPressTransport:
             status = response.status
             try:
                 raw = response.read(MAX_RESPONSE_BYTES + 1)
-            except (OSError, TimeoutError, urllib.error.URLError) as error:
+            except (OSError, TimeoutError, urllib.error.URLError, IncompleteRead) as error:
                 raise WordPressError("response_read_failed", status=status, retryable=True,
                                      ambiguous_write=write,
                                      details={"exception_type": type(error).__name__}) from None
@@ -168,12 +190,12 @@ class WordPressTransport:
                     wp_code = value.get("code")
                     if isinstance(wp_code, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", wp_code):
                         details["wordpress_code"] = wp_code
-                retry_after = response.headers.get("Retry-After", "")
-                if retry_after.isdigit():
-                    details["retry_after_seconds"] = int(retry_after)
+                delay = _retry_after_seconds(response.headers.get("Retry-After", ""))
+                if delay is not None:
+                    details["retry_after_seconds"] = delay
                 raise WordPressError("redirect_rejected" if 300 <= status < 400 else "http_error",
-                                     status=status, retryable=status == 429 or status >= 500,
-                                     ambiguous_write=write and (300 <= status < 400 or status == 429 or status >= 500),
+                                     status=status, retryable=status in (408, 429) or status >= 500,
+                                     ambiguous_write=write and (300 <= status < 400 or status in (408, 429) or status >= 500),
                                      details=details)
             if value is None:
                 raise WordPressError("invalid_json_response", status=status,
