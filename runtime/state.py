@@ -11,11 +11,15 @@ from contextlib import contextmanager
 import hashlib
 import json
 import math
+import os
+import stat
 from pathlib import Path
 import sqlite3
 import time
 from typing import Any, Callable
 
+
+FIRST_PREPUBLICATION_GATES = ("runtime_authentication", "mandatory_html_preservation", "saved_preview", "recovery_tests")
 
 CORE_GATES = (
     "runtime_authentication", "mandatory_html_preservation", "saved_preview",
@@ -90,6 +94,14 @@ class StateStore:
                     operation_key TEXT PRIMARY KEY, revision_id INTEGER NOT NULL REFERENCES revisions,
                     language TEXT NOT NULL, stage TEXT NOT NULL, payload_digest TEXT NOT NULL,
                     status TEXT NOT NULL, result TEXT, error TEXT, updated_at REAL NOT NULL);
+                CREATE TABLE IF NOT EXISTS first_publication_permit(
+                    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                    revision_id INTEGER NOT NULL REFERENCES revisions, scope TEXT NOT NULL,
+                    files TEXT NOT NULL, status TEXT NOT NULL, owner TEXT, fence INTEGER,
+                    created_at REAL NOT NULL, updated_at REAL NOT NULL);
+                CREATE TABLE IF NOT EXISTS first_publication_attempts(
+                    capacity_sha256 TEXT PRIMARY KEY, revision_id INTEGER NOT NULL REFERENCES revisions,
+                    owner TEXT NOT NULL, fence INTEGER NOT NULL, started_at REAL NOT NULL);
                 CREATE TABLE IF NOT EXISTS sources(
                     source_key TEXT PRIMARY KEY, watermark REAL NOT NULL,
                     last_attempt_end REAL, last_error TEXT);
@@ -268,6 +280,285 @@ class StateStore:
         blockers = self.gate_blockers(context, db=db)
         if blockers:
             raise GateBlocked("; ".join(blockers))
+
+
+    @staticmethod
+    def _private_bytes(path: str | Path) -> bytes:
+        """Read bounded, user-private evidence without following a symlink."""
+        path = Path(path).absolute()
+        try:
+            parent = path.parent.stat()
+            if (parent.st_uid != os.getuid() or stat.S_IMODE(parent.st_mode) != 0o700):
+                raise GateBlocked("first publication evidence directory must be private")
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            try:
+                info = os.fstat(fd)
+                if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid()
+                        or stat.S_IMODE(info.st_mode) != 0o600 or info.st_size > 16 * 1024 * 1024):
+                    raise GateBlocked("first publication evidence file must be bounded and private")
+                with os.fdopen(fd, "rb", closefd=False) as stream:
+                    raw = stream.read(16 * 1024 * 1024 + 1)
+                if len(raw) > 16 * 1024 * 1024:
+                    raise GateBlocked("first publication evidence exceeds bound")
+                return raw
+            finally:
+                os.close(fd)
+        except OSError as exc:
+            raise GateBlocked("first publication evidence unavailable") from exc
+
+    @classmethod
+    def _private_record(cls, path: str | Path) -> tuple[dict, str]:
+        raw = cls._private_bytes(path)
+        def pairs(items):
+            result = {}
+            for key, value in items:
+                if key in result:
+                    raise ValueError("duplicate JSON key")
+                result[key] = value
+            return result
+        try:
+            record = json.loads(raw, object_pairs_hook=pairs,
+                                parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
+            if not isinstance(record, dict):
+                raise ValueError("object required")
+        except (ValueError, UnicodeError) as exc:
+            raise GateBlocked("first publication evidence must be exact JSON") from exc
+        return record, hashlib.sha256(raw).hexdigest()
+
+    def _first_scope(self, revision_id: int, digest: str, context: str, db) -> dict:
+        revision = self.revision(revision_id, db)
+        if (not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest)
+                or self.runtime_binding is None or self.runtime_binding.get("wordpress_identity_id") != 5
+                or self.runtime_binding.get("site_url") != "https://sggroup.jp"
+                or self.runtime_binding.get("execution_context") != context):
+            raise GateBlocked("controlled first publication requires the fixed Author 5 runtime and full bilingual digest")
+        return {"context": context, "runtime_binding": self.runtime_binding,
+                "implementation_sha256": self.implementation_digest(),
+                "connector_sha256": hashlib.sha256(Path(__file__).with_name("wpvibe_driver.js").read_bytes()).hexdigest(),
+                "original_prompt_sha256": hashlib.sha256(self.original_prompt.read_bytes()).hexdigest(),
+                "revision_id": revision_id, "revision_key": revision["revision_key"],
+                "baseline_date": revision["baseline_date"], "event_key": revision["event_key"],
+                "common_slug": revision["common_slug"], "bundle_digest": digest}
+
+    def _first_receipt(self, record: dict, scope: dict, purpose: str, lifetime: int):
+        now = self.clock()
+        expected = {key: value for key, value in scope.items() if key not in ("connector_sha256", "stages", "revision_key", "baseline_date")}
+        if (record.get("schema_version") != 1 or record.get("purpose") != purpose
+                or any(record.get(key) != value for key, value in expected.items())
+                or record.get("execution_mode") != "live" or record.get("test_only") is not False):
+            raise GateBlocked("first publication receipt does not bind actual action and immutable scope")
+        checked, until = record.get("checked_at"), record.get("valid_until")
+        if (type(checked) not in (int, float) or type(until) not in (int, float)
+                or not math.isfinite(checked) or not math.isfinite(until) or checked > now + 5
+                or checked < now - lifetime or until <= now or until > checked + lifetime):
+            raise GateBlocked("first publication receipt expired or timeframe invalid")
+        receipts = record.get("receipts")
+        if not isinstance(receipts, list) or not receipts:
+            raise GateBlocked("first publication requires actual action receipts")
+        for item in receipts:
+            if (not isinstance(item, dict) or not item.get("tool") or not item.get("action")
+                    or hashlib.sha256(self._private_bytes(item.get("path", ""))).hexdigest() != item.get("sha256")):
+                raise GateBlocked("first publication action receipt unavailable or changed")
+
+    def _first_plan(self, plan: dict, scope: dict) -> dict:
+        from .evidence import WIDTHS, LANDSCAPES
+        if (plan.get("schema_version") != 1 or plan.get("purpose") != "controlled_private_bilingual_draft_preflight"
+                or plan.get("runtime_binding") != scope["runtime_binding"] or plan.get("bundle_digest") != scope["bundle_digest"]
+                or plan.get("common_slug") != scope["common_slug"] or plan.get("state") != "private_drafts_verified"
+                or plan.get("publication_performed") is not False or plan.get("production_ready") is not False
+                or plan.get("structural_validation", {}).get("passed") is not True
+                or plan.get("structural_validation", {}).get("errors") != []):
+            raise GateBlocked("complete unpublished exact-runtime preflight required")
+        from datetime import datetime
+        try:
+            completed = datetime.fromisoformat(plan["completed_at"].replace("Z", "+00:00")).timestamp()
+        except (KeyError, ValueError, TypeError) as exc:
+            raise GateBlocked("preflight completion time unavailable") from exc
+        if not math.isfinite(completed) or completed > self.clock() + 5 or completed < self.clock() - 3600:
+            raise GateBlocked("actual private preview preflight is stale")
+        payloads = plan.get("payloads", {})
+        if set(payloads) != {"ja", "en"} or set(plan.get("operations", {})) != {"ja", "en"} or set(plan.get("previews", {})) != {"ja", "en"}:
+            raise GateBlocked("complete bilingual preflight required")
+        languages, stages = {}, {}
+        identity = {key: plan[key] for key in ("schema_version", "purpose", "runtime_binding", "bundle_digest", "common_slug")}
+        for language in ("ja", "en"):
+            payload = payloads[language]
+            if (not isinstance(payload, dict) or set(payload) != {"language", "html", "metadata", "categories", "is_accessible_for_free", "status"}
+                    or payload.get("language") != language or payload.get("categories") != [258]
+                    or payload.get("is_accessible_for_free") is not True or payload.get("status") != "draft"
+                    or not isinstance(payload.get("html"), str) or not payload["html"]
+                    or not isinstance(payload.get("metadata"), dict) or set(payload["metadata"]) != {"title", "aioseo_title", "aioseo_description", "slug"}):
+                raise GateBlocked("preflight payload differs from fixed unpublished scope")
+            languages[language] = {"html": payload["html"], "metadata": payload["metadata"]}
+            operation = plan["operations"][language]
+            key = fingerprint({**identity, "language": language, "operation": "draft", "payload": payload})
+            source = hashlib.sha256(payload["html"].encode()).hexdigest()
+            if (not isinstance(operation, dict) or operation.get("key") != key or operation.get("status") != "saved"
+                    or type(operation.get("post_id")) is not int or operation["post_id"] <= 0
+                    or operation.get("source_sha256") != source or operation.get("metadata_sha256") != fingerprint(payload["metadata"])):
+                raise GateBlocked("preflight saved operation identity incomplete")
+            post = operation.get("saved_readback", {})
+            metadata = payload["metadata"]
+            expected = {"id": operation["post_id"], "status": "draft", "language": language, "author": 5,
+                        "kind": "stage", "idempotency_key": key, "source_sha256": source,
+                        "seo_verified": True, "content_raw": payload["html"], "common_slug": scope["common_slug"],
+                        "title": metadata.get("title"), "seo_title": metadata.get("aioseo_title"),
+                        "meta_description": metadata.get("aioseo_description"), "categories": [258],
+                        "is_accessible_for_free": True, "public_url": None}
+            if any(post.get(k) != value for k, value in expected.items()):
+                raise GateBlocked("preflight CMS readback differs from bilingual artifact")
+            report = plan["previews"][language]
+            if (report.get("passed") is not True or report.get("errors") != [] or report.get("execution_mode") != "live"
+                    or report.get("test_only") is not False or report.get("actual_authenticated_preview") is not True
+                    or report.get("actual_live_browser") is not False or report.get("wordpress_identity_id") != 5
+                    or report.get("verification_context") != "authenticated_saved_theme_preview"
+                    or report.get("post_id") != post["id"] or report.get("source_sha256") != source
+                    or report.get("runtime_binding") != scope["runtime_binding"]):
+                raise GateBlocked("actual authenticated saved-theme preview proof required")
+            runs = report.get("runs", [])
+            expected_runs = {(width, 900) for width in WIDTHS} | set(LANDSCAPES)
+            if (not isinstance(runs, list) or len(runs) != len(expected_runs)
+                    or any(not isinstance(run, dict) or not isinstance(run.get("measurement"), dict)
+                           or run["measurement"].get("errors") != [] for run in runs)
+                    or {(run.get("width"), run.get("height")) for run in runs} != expected_runs):
+                raise GateBlocked("all actual 28 saved-preview viewport checks required")
+            raw_report, report_sha = self._private_record(report.get("preview_report_path", ""))
+            stripped = {k: v for k, v in report.items() if k not in ("preview_report_path", "preview_report_sha256")}
+            snapshot = self._private_bytes(report.get("saved_theme_document_path", ""))
+            if (report_sha != report.get("preview_report_sha256") or raw_report != stripped
+                    or hashlib.sha256(snapshot).hexdigest() != report.get("saved_theme_document_sha256")
+                    or payload["html"].encode() not in snapshot):
+                raise GateBlocked("actual saved-theme browser artifacts changed")
+            stages[language] = {"post_id": post["id"], "key": key, "source_sha256": source,
+                                "metadata_sha256": operation["metadata_sha256"]}
+        if stages["ja"]["post_id"] == stages["en"]["post_id"] or fingerprint(languages) != scope["bundle_digest"]:
+            raise GateBlocked("preflight does not bind two distinct full bilingual stages")
+        return stages
+
+    def _first_rows(self, db, scope: dict, stages: dict):
+        rid, event = scope["revision_id"], scope["event_key"]
+        for row in db.execute("SELECT * FROM posts"):
+            checkpoint = db.execute("SELECT * FROM checkpoints WHERE revision_id=? AND language=?", (rid, row["language"])).fetchone()
+            expected_url = "https://sggroup.jp/" + row["language"] + "/article/news/" + scope["common_slug"] + "/"
+            if (row["event_key"] != event or row["language"] not in stages or not checkpoint or not checkpoint["published"]
+                    or checkpoint["public_post_id"] != row["post_id"] or row["public_url"] != expected_url):
+                raise GateBlocked("prior unrelated public posts exclude controlled first publication")
+        for row in db.execute("SELECT * FROM checkpoints"):
+            if ((row["published"] or row["public_post_id"]) and row["revision_id"] != rid
+                    or row["revision_id"] == rid and (row["language"] not in stages
+                    or row["stage_post_id"] != stages[row["language"]]["post_id"])):
+                raise GateBlocked("publication checkpoint differs from the sole permitted staged pair")
+        revision = self.revision(rid, db)
+        if revision["bundle_digest"] and revision["bundle_digest"] != scope["bundle_digest"]:
+            raise GateBlocked("permitted full bilingual payload cannot change")
+        for row in db.execute("SELECT * FROM operations"):
+            if row["revision_id"] != rid:
+                if row["status"] != "succeeded":
+                    raise GateBlocked("unresolved unrelated mutation excludes first publication")
+                continue
+            language = row["language"]
+            payload = {"stage_post_id": stages.get(language, {}).get("post_id"), "target_post_id": None,
+                       "bundle_digest": scope["bundle_digest"], "status": "publish"}
+            key = fingerprint({"event": event, "revision": revision["revision_key"], "language": language,
+                               "stage": "publish", "payload": payload})
+            if language not in stages or row["stage"] != "publish" or row["operation_key"] != key or row["payload_digest"] != fingerprint(payload):
+                raise GateBlocked("operation journal contains an unrelated or unknown first-publication mutation")
+
+    def _first_files(self, files: dict, scope: dict, db) -> dict:
+        records = {}
+        for name in ("plan", "authorization", "capacity"):
+            record, digest = self._private_record(files[name]["path"])
+            if digest != files[name]["sha256"]:
+                raise GateBlocked("controlled first publication receipt changed")
+            records[name] = record
+        self._first_receipt(records["authorization"], scope, "user_authorized_controlled_first_publication", 3600)
+        authorization = records["authorization"]
+        if (authorization.get("source") != "user_message" or authorization.get("user_instruction") != "公開を開始すること"
+                or not any(item.get("tool") == "user_message" for item in authorization["receipts"])):
+            raise GateBlocked("actual user instruction for initial bilingual publication required")
+        self._first_receipt(records["capacity"], scope, "controlled_first_publication_capacity", 600)
+        stages = self._first_plan(records["plan"], scope)
+        published = db.execute("SELECT count(*) FROM checkpoints WHERE revision_id=? AND published=1", (scope["revision_id"],)).fetchone()[0]
+        minimum_calls = 16 + 7 * (2 - published)
+        measurements = records["capacity"].get("measurements", {})
+        for name in ("quota_available", "estimated_remaining_calls", "recovery_headroom"):
+            if type(measurements.get(name)) is not int or measurements[name] <= 0:
+                raise GateBlocked("actual remaining quota and recovery headroom required")
+        if (measurements["estimated_remaining_calls"] < minimum_calls or measurements["recovery_headroom"] < 10
+                or measurements["quota_available"] < measurements["estimated_remaining_calls"] + measurements["recovery_headroom"]):
+            raise GateBlocked("insufficient actual quota for remaining pair and recovery")
+        self._first_rows(db, scope, stages)
+        blockers = [item for item in self.gate_blockers(scope["context"], db) if item.split(":", 1)[0] in FIRST_PREPUBLICATION_GATES]
+        if blockers:
+            raise GateBlocked("; ".join(blockers))
+        paused = json.loads(db.execute("SELECT value FROM settings WHERE key='paused'").fetchone()[0])
+        if paused is not True:
+            raise GateBlocked("controlled first publication requires hourly maintenance pause to remain in place")
+        return stages
+
+    def record_first_publication_permit(self, revision_id: int, bundle_digest: str,
+            preflight_plan_path: str | Path, authorization_receipt_path: str | Path,
+            capacity_receipt_path: str | Path, context: str):
+        """Record one explicit user's first pair; never promote gates or resume automation."""
+        paths = {"plan": preflight_plan_path, "authorization": authorization_receipt_path, "capacity": capacity_receipt_path}
+        files = {name: {"path": str(Path(path).absolute()), "sha256": self._private_record(path)[1]} for name, path in paths.items()}
+        with self.transaction() as db:
+            scope = self._first_scope(revision_id, bundle_digest, context, db)
+            stages = self._first_files(files, scope, db)
+            scope["stages"] = stages
+            old = db.execute("SELECT * FROM first_publication_permit WHERE singleton=1").fetchone()
+            if old:
+                if json.loads(old["scope"]) != scope or old["status"] == "complete":
+                    raise GateBlocked("first-publication permit is permanently bound to its sole revision and pair")
+                lease = db.execute("SELECT * FROM leases WHERE event_key=?", (scope["event_key"],)).fetchone()
+                if lease and lease["expires_at"] > self.clock():
+                    raise LeaseLost("active first-publication attempt cannot refresh receipts")
+            elif db.execute("SELECT 1 FROM posts LIMIT 1").fetchone() or db.execute("SELECT 1 FROM checkpoints WHERE published=1 LIMIT 1").fetchone():
+                raise GateBlocked("controlled first publication cannot adopt preexisting public posts")
+            if db.execute("SELECT 1 FROM first_publication_attempts WHERE capacity_sha256=?", (files["capacity"]["sha256"],)).fetchone():
+                raise GateBlocked("fresh remaining-capacity receipt required for another attempt")
+            db.execute("INSERT INTO first_publication_permit VALUES(1,?,?,?,'pending',NULL,NULL,?,?) "
+                       "ON CONFLICT(singleton) DO UPDATE SET files=excluded.files,status='pending',owner=NULL,fence=NULL,updated_at=excluded.updated_at",
+                       (revision_id, canonical(scope), canonical(files), self.clock(), self.clock()))
+        return {"revision_id": revision_id, "bundle_digest": bundle_digest, "stages": stages,
+                "hourly_automation_changed": False, "production_gates_changed": False}
+
+    def require_first_publication_ready(self, revision_id: int, context: str, db=None, *, lease: dict | None = None) -> dict:
+        if db is None:
+            with self.connect() as connection:
+                return self.require_first_publication_ready(revision_id, context, connection, lease=lease)
+        row = db.execute("SELECT * FROM first_publication_permit WHERE singleton=1").fetchone()
+        if not row or row["revision_id"] != revision_id or row["status"] not in ("pending", "active"):
+            raise GateBlocked("sole initial-publication permit unavailable")
+        scope, files = json.loads(row["scope"]), json.loads(row["files"])
+        current = self._first_scope(revision_id, scope["bundle_digest"], context, db)
+        if any(scope.get(key) != value for key, value in current.items()):
+            raise GateBlocked("initial-publication permit runtime, code or article scope changed")
+        stages = self._first_files(files, scope, db)
+        if stages != scope.get("stages"):
+            raise GateBlocked("permitted staged pair changed")
+        if lease is not None:
+            self.assert_lease(db, lease)
+            if (row["status"] != "active" or row["owner"] != lease["owner"] or row["fence"] != lease["fence"]):
+                raise LeaseLost("controlled first-publication permit is not owned by this attempt")
+        return {"scope": scope, "files": files}
+
+    def begin_first_publication_attempt(self, lease: dict, context: str):
+        with self.fenced(lease) as db:
+            permit = self.require_first_publication_ready(lease["revision_id"], context, db)
+            row = db.execute("SELECT * FROM first_publication_permit WHERE singleton=1").fetchone()
+            if row["status"] != "pending":
+                raise GateBlocked("fresh remaining-capacity receipt required after interruption")
+            sha = permit["files"]["capacity"]["sha256"]
+            if db.execute("SELECT 1 FROM first_publication_attempts WHERE capacity_sha256=?", (sha,)).fetchone():
+                raise GateBlocked("remaining-capacity receipt already consumed")
+            db.execute("INSERT INTO first_publication_attempts VALUES(?,?,?,?,?)", (sha, lease["revision_id"], lease["owner"], lease["fence"], self.clock()))
+            db.execute("UPDATE first_publication_permit SET status='active',owner=?,fence=?,updated_at=? WHERE singleton=1", (lease["owner"], lease["fence"], self.clock()))
+
+    def end_first_publication_attempt(self, lease: dict, complete: bool):
+        with self.transaction() as db:
+            db.execute("UPDATE first_publication_permit SET status=?,owner=NULL,fence=NULL,updated_at=? WHERE singleton=1 AND revision_id=? AND owner=? AND fence=?",
+                       ("complete" if complete else "partial", self.clock(), lease["revision_id"], lease["owner"], lease["fence"]))
 
     def enqueue(self, semantic_identity: dict, material_facts: dict, headline: str,
                 sources: list[dict], common_slug: str, baseline_date: str) -> tuple[int, bool]:

@@ -42,6 +42,10 @@ check("strict route/user/site/category and sensitive-field rejection", () => {
 });
 check("CLI owner/bridge/config override and duplicated options refused", () => {
   helpers.argumentsValid(args);
+  helpers.argumentsValid([...args.slice(0, -1), "preflight", "--bundle", "/private/canonical.json", "--plan", "/private/plan.json", "--browser-artifacts", "/private/browser"]);
+  helpers.argumentsValid([...args.slice(0, -1), "first-publish", "--state", "/private/queue.sqlite3", "--revision-id", "1", "--bundle", "/private/audited.json", "--preflight-plan", "/private/plan.json", "--authorization-receipt", "/private/auth.json", "--capacity-receipt", "/private/capacity.json", "--browser-artifacts", "/private/browser"]);
+  assert.throws(() => helpers.argumentsValid([...args.slice(0, -1), "preflight", "--publish", "true"]));
+  assert.throws(() => helpers.argumentsValid([...args.slice(0, -1), "first-publish", "--force", "true"]));
   for (const extra of [["--expected-user-id", "1"], ["--transport", "direct"], ["--bridge-dir", "/tmp/evil"],
     ["--config", "/tmp/evil"], ["--route", "pretty"], ["diagnose"], ["--authorization", "hidden"]])
     assert.throws(() => helpers.argumentsValid([...args.slice(0, -1), ...extra, "authenticate"]));

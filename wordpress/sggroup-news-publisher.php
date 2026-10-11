@@ -2,7 +2,7 @@
 /**
  * Plugin Name: SG Group News Publisher
  * Description: Dedicated, fail-closed bilingual News publishing integration. Administrator installation and an explicit sgnews_publish grant are required.
- * Version: 0.1.0
+ * Version: 0.1.1
  * Requires PHP: 8.1
  * License: GPL-2.0-or-later
  */
@@ -280,6 +280,8 @@ final class SGNews_Publisher {
     private const SETUP_ACTION = 'sgnews_grant_publisher';
     private static bool $internal = false;
     private static int $seoReadID = 0;
+    private static int $headBufferLevel = 0;
+    private static ?array $headContext = null;
     public static function boot(): void {
         add_action('rest_api_init', [self::class, 'routes']);
         add_action('admin_menu', [self::class, 'setupMenu']);
@@ -287,6 +289,8 @@ final class SGNews_Publisher {
         add_filter('the_content', [self::class, 'render'], PHP_INT_MAX);
         add_filter('map_meta_cap', [self::class, 'protect'], 20, 4);
         add_filter('aioseo_schema_output', [self::class, 'freeSchema'], 20);
+        add_action('wp_head', [self::class, 'beginNewsHead'], PHP_INT_MIN);
+        add_action('wp_head', [self::class, 'endNewsHead'], PHP_INT_MAX);
     }
     public static function setupMenu(): void {
         if (current_user_can('manage_options')) {
@@ -767,16 +771,89 @@ final class SGNews_Publisher {
         try { $post=self::managed($id); return $post->post_status==='publish'||current_user_can(self::CAP)||current_user_can('manage_options')?get_post_meta($id,'_sgnews_source_html',true):$content; }
         catch(Throwable $e) { return $content; }
     }
-    public static function freeSchema($graphs) {
+    /** Only an intact, owned single News post or its authenticated stage preview. */
+    private static function newsHeadContext(): ?array {
+        if (!function_exists('is_singular') || !is_singular('post')) { return null; }
         $id=get_the_ID();
-        if (!$id || get_post_meta($id,'_sgnews_kind',true)!=='canonical' || get_post_meta($id,'_sgnews_manager',true)!==self::POLICY || !is_array($graphs)) { return $graphs; }
-        $walk=function(array $data) use(&$walk): array {
-            $types=(array)($data['@type']??[]);
-            if (array_intersect($types,['Article','BlogPosting','NewsArticle'])) { $data['isAccessibleForFree']=true; }
+        if (!$id || get_post_meta($id,'_sgnews_manager',true)!==self::POLICY) { return null; }
+        try {
+            $post=self::managed($id); $kind=get_post_meta($id,'_sgnews_kind',true);
+            if (!(($kind==='canonical' && $post->post_status==='publish')
+                    || ($kind==='stage' && $post->post_status==='draft' && get_current_user_id()===self::OWNER && current_user_can(self::CAP)))) { return null; }
+            if (rtrim(home_url('/'),'/')!=='https://sggroup.jp') { return null; }
+            $metadata=get_post_meta($id,'_sgnews_metadata',true); $lang=get_post_meta($id,'_sgnews_language',true);
+            $urls=[];
+            foreach(['ja','en'] as $language) { $urls[$language]=home_url('/'.$language.'/article/news/'.$metadata['slug'].'/'); }
+            return ['id'=>$id,'language'=>$lang,'metadata'=>$metadata,'urls'=>$urls,'canonical'=>$urls[$lang]];
+        } catch(Throwable $e) { return null; }
+    }
+    /** Adjust AIOSEO's existing graph; never inject a second JSON-LD script. */
+    public static function freeSchema($graphs) {
+        $context=self::newsHeadContext();
+        if (!$context || !is_array($graphs)) { return $graphs; }
+        $count=0;
+        $countArticles=function(array $data) use(&$countArticles,&$count): void {
+            if (array_intersect((array)($data['@type']??[]),['Article','BlogPosting','NewsArticle'])) { ++$count; }
+            foreach($data as $value) { if(is_array($value)) { $countArticles($value); } }
+        };
+        $countArticles($graphs);
+        // Ambiguous/missing graphs remain unchanged and must fail frontend QA.
+        if ($count!==1) { return $graphs; }
+        $walk=function(array $data) use(&$walk,$context): array {
+            if (array_intersect((array)($data['@type']??[]),['Article','BlogPosting','NewsArticle'])) {
+                $data['@type']='NewsArticle'; $data['isAccessibleForFree']=true;
+                $data['headline']=$context['metadata']['title']; $data['inLanguage']=$context['language'];
+                $data['url']=$context['canonical']; $data['mainEntityOfPage']=['@id'=>$context['canonical']];
+                $organization=['@type'=>'Organization','name'=>'SG Group','url'=>'https://sggroup.jp/'];
+                $data['author']=$organization; $data['publisher']=$organization;
+            }
             foreach($data as $key=>$value) { if(is_array($value)) { $data[$key]=$walk($value); } }
             return $data;
         };
         return $walk($graphs);
+    }
+    public static function beginNewsHead(): void {
+        if (self::$headBufferLevel) { return; }
+        $context=self::newsHeadContext();
+        if (!$context) { return; }
+        self::$headContext=$context; ob_start(); self::$headBufferLevel=ob_get_level();
+    }
+    public static function endNewsHead(): void {
+        if (!self::$headBufferLevel) { return; }
+        // Never close another plugin's buffer. An unmatched buffer means no
+        // correction is attempted; actual frontend QA remains mandatory.
+        if (ob_get_level()!==self::$headBufferLevel) { self::$headBufferLevel=0; self::$headContext=null; return; }
+        $head=ob_get_clean(); $context=self::$headContext;
+        self::$headBufferLevel=0; self::$headContext=null;
+        if (!is_string($head) || !$context || self::newsHeadContext()!==$context) { echo $head; return; }
+        // Tokenize links while preserving raw-text elements and comments byte
+        // for byte. A link-looking string inside JS/CSS is never edited.
+        $pattern='~<!--.*?(?:-->|$)|<(script|style|textarea|title)\b(?:"[^"]*"|\'[^\']*\'|[^\'">])*?>.*?(?:</\1\s*>|$)|<link\b(?:"[^"]*"|\'[^\']*\'|[^\'">])*?>~is';
+        $ambiguous=false;
+        $clean=preg_replace_callback($pattern,static function(array $match) use(&$ambiguous): string {
+            $token=$match[0];
+            if ((str_starts_with($token,'<!--') && !str_ends_with($token,'-->'))
+                    || (!empty($match[1]) && !preg_match('~</'.preg_quote($match[1],'~').'\s*>$~i',$token))) { $ambiguous=true; }
+            if (!preg_match('/^<link\b/i',$token)) { return $token; }
+            $previous=libxml_use_internal_errors(true);
+            try {
+                $dom=new DOMDocument();
+                if (!$dom->loadHTML('<html><head>'.$token.'</head><body></body></html>',LIBXML_NONET|LIBXML_NOERROR|LIBXML_NOWARNING)) { return $token; }
+                $links=$dom->getElementsByTagName('link');
+                if ($links->length!==1) { return $token; }
+                $link=$links->item(0); $rel=preg_split('/\s+/',strtolower(trim($link->getAttribute('rel'))));
+                if (in_array('canonical',$rel,true)) { return ''; }
+                if (in_array('alternate',$rel,true) && in_array(strtolower($link->getAttribute('hreflang')),['ja','en','x-default'],true)) { return ''; }
+                return $token;
+            } finally { libxml_clear_errors(); libxml_use_internal_errors($previous); }
+        },$head);
+        if (!is_string($clean) || $ambiguous) { echo $head; return; }
+        echo rtrim($clean,"\r\n");
+        echo "\n".'<link rel="canonical" href="'.esc_url($context['canonical']).'" />'."\n";
+        foreach(['ja','en','x-default'] as $language) {
+            $url=$context['urls'][$language==='x-default'?'en':$language];
+            echo '<link rel="alternate" hreflang="'.esc_attr($language).'" href="'.esc_url($url).'" />'."\n";
+        }
     }
 }
 if (function_exists('add_action')) { SGNews_Publisher::boot(); }

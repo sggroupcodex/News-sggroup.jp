@@ -69,6 +69,9 @@ function get_posts($args){
     return array_slice($ids,0,$args['numberposts']);
 }
 function get_the_ID(){return $GLOBALS['post']->ID??$GLOBALS['current_post'];}
+function is_singular($type=''){return ($GLOBALS['single_post']??true) && ($type===''||$type==='post');}
+function esc_url($v){return htmlspecialchars($v,ENT_QUOTES|ENT_SUBSTITUTE,'UTF-8');}
+function esc_attr($v){return htmlspecialchars($v,ENT_QUOTES|ENT_SUBSTITUTE,'UTF-8');}
 #[AllowDynamicProperties]
 class WP_Query {}
 function setup_postdata($post){
@@ -230,5 +233,76 @@ rejected(SGNews_Publisher::renew(request(['scope'=>'news','owner'=>$owner,'fence
 check(!array_key_exists('_sgnews_publisher_mutation_v1',$GLOBALS['options']),'mutation context/barrier restored after failures');
 $fixture=json_decode(file_get_contents(__DIR__.'/../runtime/fixtures/sgnews-publisher-v1.json'),true,512,JSON_THROW_ON_ERROR);
 check($fixture['fixture_only']===true && $status['api_version']===$fixture['status']['api_version'],'shared contract fixture is explicitly simulated');
+$graph=[['@type'=>'BlogPosting','@id'=>'https://sggroup.jp/ja/article/news/'.$slug.'/#blogposting',
+    'author'=>['@type'=>'Person','name'=>'Posting Account'],'publisher'=>['@id'=>'https://sggroup.jp/#organization'],
+    'datePublished'=>'2026-10-09T12:00:00+09:00','image'=>['@id'=>'image-id']],
+    ['@type'=>'Organization','@id'=>'https://sggroup.jp/#organization','name'=>'SG Group','url'=>'https://sggroup.jp/']];
+$rawScript='<script>const s=\'<link rel="canonical" href="https://example.org/js/">\';</script>';
+$rawStyle='<style>body:before{content:\'<link rel="canonical" href="https://example.org/css/">\'}</style>';
+$comment='<!-- <link rel="canonical" href="https://example.org/comment/"> -->';
+$rawTitle='<title>&lt;link rel="canonical" href="https://example.org/title/"&gt;</title>';
+$head=$rawScript.$rawStyle.$comment.$rawTitle.'<link rel="stylesheet" href="/theme.css"><link rel="alternate" type="application/rss+xml" href="/feed/">'
+    .'<link rel="CANONICAL" href="https://example.org/wrong/">'
+    .'<link rel=canonical href=https://example.org/duplicate/>'
+    .'<link rel="alternate" hreflang="ja" href="https://example.org/ja/">'
+    .'<link rel="alternate" hreflang="EN" href="https://example.org/en/">'
+    .'<link rel="alternate" hreflang="x-default" href="https://example.org/default/">'
+    .'<link rel="alternate" hreflang="fr" href="https://example.org/fr/">';
+function newsHead($head){ob_start();SGNews_Publisher::beginNewsHead();echo $head;SGNews_Publisher::endNewsHead();return ob_get_clean();}
+foreach(['ja'=>$newJa,'en'=>$newEn] as $language=>$public){
+    $GLOBALS['current_post']=$public['id'];
+    $out=SGNews_Publisher::freeSchema($graph);$article=$out[0];
+    check($article['@type']==='NewsArticle' && $article['isAccessibleForFree']===true,'one existing AIOSEO BlogPosting becomes free NewsArticle '.$language);
+    check($article['author']===['@type'=>'Organization','name'=>'SG Group','url'=>'https://sggroup.jp/'] && $article['publisher']===$article['author'],'NewsArticle author and publisher are SG Group Organization '.$language);
+    check($article['url']===$public['public_url'] && $article['mainEntityOfPage']['@id']===$public['public_url'] && $article['inLanguage']===$language,'schema uses own shared public URL and language '.$language);
+    check($article['datePublished']===$graph[0]['datePublished'] && $article['image']===$graph[0]['image'] && $article['@id']===$graph[0]['@id'] && $out[1]===$graph[1],'unrelated AIOSEO graph data dates/image/IDs preserved '.$language);
+    check(SGNews_Publisher::freeSchema($out)===$out,'schema filtering is idempotent '.$language);
+    check(SGNews_Publisher::freeSchema(array_merge($graph,[['@type'=>'Article']]))===array_merge($graph,[['@type'=>'Article']]),'ambiguous Article graph not silently certified '.$language);
+    check(SGNews_Publisher::freeSchema([['@type'=>'WebPage']])===[['@type'=>'WebPage']],'missing Article graph unchanged '.$language);
+    $rendered=newsHead($head);
+    check(str_contains($rendered,$rawScript.$rawStyle.$comment.$rawTitle),'raw JS/style/comment/title bytes preserved '.$language);
+    $dom=new DOMDocument();$dom->loadHTML('<html><head>'.$rendered.'</head><body><p>Body unchanged</p></body></html>',LIBXML_NONET|LIBXML_NOERROR|LIBXML_NOWARNING);
+    $actualCanonical=[];$actualAlternates=[];
+    foreach($dom->getElementsByTagName('link') as $link){
+        if($link->getAttribute('rel')==='canonical')$actualCanonical[]=$link->getAttribute('href');
+        if($link->getAttribute('rel')==='alternate' && $link->getAttribute('hreflang'))$actualAlternates[$link->getAttribute('hreflang')][]=$link->getAttribute('href');
+    }
+    check($actualCanonical===[$public['public_url']],'duplicate wrong canonical replaced with one own canonical '.$language);
+    foreach(['ja','en','x-default'] as $alternate){
+        $expected='https://sggroup.jp/'.($alternate==='x-default'?'en':$alternate).'/article/news/'.$slug.'/';
+        check(($actualAlternates[$alternate]??null)===[$expected],'exact reciprocal alternate '.$language.' '.$alternate);
+    }
+    check(($actualAlternates['fr']??null)===['https://example.org/fr/'] && str_contains($rendered,'href="/theme.css"') && str_contains($rendered,'href="/feed/"'),'unrelated head links preserved '.$language);
+    check(!str_contains($rendered,'\\n<link') && $dom->getElementsByTagName('body')->item(0)->textContent==='Body unchanged','head remains valid with real whitespace '.$language);
+    check(newsHead($rendered)===$rendered,'head correction is idempotent '.$language);
+}
+$GLOBALS['current_post']=$ja['id'];
+check(SGNews_Publisher::freeSchema($graph)[0]['@type']==='NewsArticle','authenticated owned draft preview receives same schema as intended public page');
+$GLOBALS['current_user']=0;
+check(SGNews_Publisher::freeSchema($graph)===$graph && newsHead($head)===$head,'anonymous draft receives no head or schema correction');
+$GLOBALS['current_user']=5;$GLOBALS['current_post']=$newJa['id'];
+$oldSource=$GLOBALS['meta'][$newJa['id']]['_sgnews_source_sha256'];$GLOBALS['meta'][$newJa['id']]['_sgnews_source_sha256']=str_repeat('0',64);
+check(SGNews_Publisher::freeSchema($graph)===$graph && newsHead($head)===$head,'corrupt managed source cannot receive valid schema/head');
+$GLOBALS['meta'][$newJa['id']]['_sgnews_source_sha256']=$oldSource;
+$oldOwner=$GLOBALS['posts'][$newJa['id']]->post_author;$GLOBALS['posts'][$newJa['id']]->post_author=9;
+check(SGNews_Publisher::freeSchema($graph)===$graph && newsHead($head)===$head,'other owner untouched even with copied manager metadata');
+$GLOBALS['posts'][$newJa['id']]->post_author=$oldOwner;
+$GLOBALS['single_post']=false;
+check(SGNews_Publisher::freeSchema($graph)===$graph && newsHead($head)===$head,'archives and non-single contexts unchanged');
+$GLOBALS['single_post']=true;$GLOBALS['current_post']=999999;
+check(SGNews_Publisher::freeSchema($graph)===$graph && newsHead($head)===$head,'ordinary existing articles untouched');
+$GLOBALS['current_post']=$newJa['id'];
+foreach(['<script>const s=\'<link rel="canonical" href="https://example.org/">\';','<!-- unfinished <link rel="canonical" href="https://example.org/">'] as $malformed){
+    check(newsHead($malformed)===$malformed,'unclosed raw-text or comment fails unchanged rather than editing fake link');
+}
+ob_start();SGNews_Publisher::beginNewsHead();echo $head;$GLOBALS['current_post']=999999;SGNews_Publisher::endNewsHead();
+check(ob_get_clean()===$head,'post context change during wp_head cancels correction');
+$GLOBALS['current_post']=$newJa['id'];
+$baselineLevel=ob_get_level();ob_start();SGNews_Publisher::beginNewsHead();echo $head;ob_start();echo 'nested-plugin-buffer';
+$nestedLevel=ob_get_level();SGNews_Publisher::endNewsHead();
+check(ob_get_level()===$nestedLevel,'mismatched head buffer never closes another plugin buffer');
+ob_end_flush();ob_end_flush();$mismatched=ob_get_clean();
+check($mismatched===$head.'nested-plugin-buffer' && ob_get_level()===$baselineLevel,'unmatched buffer remains original and caller retains cleanup control');
+check(str_contains(newsHead($head),'<link rel="canonical" href="'.$newJa['public_url'].'"'),'next independent head invocation works after buffer mismatch');
 echo json_encode(['tests'=>$tests,'failures'=>$failures,'scope'=>'PHP plugin logic with WordPress API doubles; live WordPress/MySQL/rendering validation is still required'],JSON_UNESCAPED_UNICODE|JSON_PRETTY_PRINT)."\n";
 exit($failures?1:0);

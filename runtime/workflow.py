@@ -188,7 +188,7 @@ class Workflow:
         operation_key = fingerprint({"event": lease["event_key"], "revision": revision["revision_key"],
                                      "language": language, "stage": stage, "payload": payload})
         with self.store.fenced(lease) as db:
-            self.store.require_ready(self.context, db)
+            self._require_execution_ready(lease["revision_id"], db)
             operation = db.execute("SELECT * FROM operations WHERE operation_key=?", (operation_key,)).fetchone()
             fresh = operation is None
             if operation and operation["status"] == "succeeded":
@@ -200,7 +200,7 @@ class Workflow:
         result = None
         # The intent above survives a process crash inside the following transaction.
         with self.store.fenced(lease) as db:
-            self.store.require_ready(self.context, db)
+            self._require_execution_ready(lease["revision_id"], db)
             operation = db.execute("SELECT * FROM operations WHERE operation_key=?", (operation_key,)).fetchone()
             if operation["status"] == "succeeded":
                 return json.loads(operation["result"])
@@ -265,8 +265,36 @@ class Workflow:
             db.execute("UPDATE revisions SET bundle_json=?,bundle_digest=?,state='validated',retry_stage=NULL,last_error=NULL,updated_at=? "
                        "WHERE id=?", (canonical(bundle), digest, self.store.clock(), lease["revision_id"]))
 
+    def _require_execution_ready(self, revision_id: int, db=None):
+        self.store.require_ready(self.context, db)
+
+    def _prepare_stages(self, lease: dict, bundle: dict):
+        pass
+
+    def execute_first_publication(self, revision_id: int, owner: str, bundle: dict | None = None) -> dict:
+        """One explicitly authorized initial pair, with ordinary hourly gates still blocked."""
+        permit = self.store.require_first_publication_ready(revision_id, self.context)
+        revision = self.store.revision(revision_id)
+        candidate = bundle if bundle is not None else json.loads(revision["bundle_json"] or "null")
+        if not isinstance(candidate, dict) or bundle_digest(candidate) != permit["scope"]["bundle_digest"]:
+            raise GateBlocked("initial-publication full bilingual payload differs from permit")
+        self._validate(candidate, revision)  # All eight executed editorial/QA checks remain mandatory.
+        lease = self.store.acquire(revision_id, owner)
+        complete = False
+        try:
+            self.store.begin_first_publication_attempt(lease, self.context)
+            controlled = _FirstPublicationWorkflow(self.store, self.transport, self.validator,
+                                                   self.context, self.original_prompt, lease)
+            result = controlled.execute(revision_id, owner, bundle, owned_lease=lease)
+            complete = True
+            return {**result, "controlled_first_publication": True, "hourly_automation_changed": False,
+                    "production_gates_changed": False}
+        finally:
+            self.store.end_first_publication_attempt(lease, complete)
+            self.store.release(lease)
+
     def execute(self, revision_id: int, owner: str, bundle: dict | None = None, *, owned_lease: dict | None = None) -> dict:
-        self.store.require_ready(self.context)
+        self._require_execution_ready(revision_id)
         if hasattr(self.transport, "verify_ready"):
             self.transport.verify_ready()  # Refresh actual identity/route capabilities before inspecting supported flags.
         if hasattr(self.transport, "runtime_binding"):
@@ -288,6 +316,7 @@ class Workflow:
                 raise NeedsCorrection("native production must submit full audited bilingual article bundle")
             bundle = json.loads(revision["bundle_json"])
             self._validate(bundle, revision)  # Includes evidence/artifact changes since a previous run.
+            self._prepare_stages(lease, bundle)
             for language in LANGUAGES:
                 checkpoint = self._checkpoint(revision_id, language)
                 if checkpoint["published"]:
@@ -436,6 +465,75 @@ class Workflow:
                 if lease:
                     self.store.release(lease)
         return result
+
+
+class _FirstPublicationWorkflow(Workflow):
+    """Internal revision-bound execution; never used by run_pending or normal execute."""
+    def __init__(self, store, transport, validator, context, original_prompt, lease):
+        super().__init__(store, transport, validator, context, original_prompt)
+        self._first_lease = lease
+
+    def _require_execution_ready(self, revision_id: int, db=None):
+        if revision_id != self._first_lease["revision_id"]:
+            raise GateBlocked("controlled first publication cannot switch revisions")
+        return self.store.require_first_publication_ready(revision_id, self.context, db,
+                                                          lease=self._first_lease)
+
+    def submit_bundle(self, lease: dict, bundle: dict):
+        permit = self._require_execution_ready(lease["revision_id"])
+        if bundle_digest(bundle) != permit["scope"]["bundle_digest"]:
+            raise GateBlocked("controlled initial article cannot change its full bilingual payload")
+        return super().submit_bundle(lease, bundle)
+
+    def _prepare_stages(self, lease: dict, bundle: dict):
+        permit = self._require_execution_ready(lease["revision_id"])
+        scope = permit["scope"]
+        validated = {}
+        # Fresh real readbacks of BOTH immutable stages precede adopting either checkpoint.
+        for language in LANGUAGES:
+            expected = scope["stages"][language]
+            post = self.transport.get_post(expected["post_id"])
+            errors = self._saved_errors(language, bundle["languages"][language], post, scope["common_slug"])
+            if (post.get("id") != expected["post_id"] or post.get("status") != "draft"
+                    or post.get("author") != 5 or post.get("kind") != "stage"
+                    or post.get("public_url") is not None or post.get("idempotency_key") != expected["key"]
+                    or post.get("source_sha256") != expected["source_sha256"] or post.get("seo_verified") is not True):
+                errors.append("permitted_immutable_saved_stage")
+            if errors:
+                raise NeedsCorrection("first-publication saved stage changed: " + language + ": " + ",".join(errors))
+            validated[language] = post
+        # Preserve the already-public side before publishing its missing peer.
+        # Peer-dependent schema/hreflang QA still waits until BOTH are public.
+        checkpoints = {language: self._checkpoint(lease["revision_id"], language) for language in LANGUAGES}
+        if any(checkpoint["published"] for checkpoint in checkpoints.values()) and not all(
+                checkpoint["published"] for checkpoint in checkpoints.values()):
+            for language, checkpoint in checkpoints.items():
+                if not checkpoint["published"]:
+                    continue
+                try:
+                    published = self.transport.get_post(checkpoint["public_post_id"])
+                except Exception as exc:
+                    if getattr(exc, "status", None) == 404:
+                        raise NeedsCorrection("known first-pair publication disappeared: " + language) from exc
+                    raise
+                expected_url = "https://sggroup.jp/" + language + "/article/news/" + scope["common_slug"] + "/"
+                errors = self._saved_errors(language, bundle["languages"][language], published, scope["common_slug"])
+                if (published.get("id") != checkpoint["public_post_id"] or published.get("status") != "publish"
+                        or published.get("author") != 5 or published.get("kind") != "canonical"
+                        or published.get("public_url") != expected_url or published.get("seo_verified") is not True
+                        or published.get("source_sha256") != scope["stages"][language]["source_sha256"]):
+                    errors.append("known_first_pair_canonical_identity")
+                if errors:
+                    raise NeedsCorrection("known first-pair publication changed before peer publication: " + language)
+        with self.store.fenced(lease) as db:
+            self._require_execution_ready(lease["revision_id"], db)
+            for language, post in validated.items():
+                checkpoint = self._checkpoint(lease["revision_id"], language, db)
+                if checkpoint["stage_post_id"] not in (None, post["id"]):
+                    raise GateBlocked("initial-publication checkpoint cannot switch saved stage")
+                db.execute("INSERT INTO checkpoints(revision_id,language,stage_post_id,draft_validated,result) VALUES(?,?,?,?,?) "
+                           "ON CONFLICT(revision_id,language) DO UPDATE SET draft_validated=1",
+                           (lease["revision_id"], language, post["id"], 1, canonical(post)))
 
 
 def main():

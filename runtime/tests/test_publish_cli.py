@@ -12,6 +12,7 @@ import unittest
 from unittest.mock import patch
 
 from runtime.publish import LiveBrowserVerifier, _PrivateThemeDocument, _Validator, main
+from runtime.state import StateStore
 from runtime.tests.test_article_qa import synthetic_bundle
 from runtime.tests.test_publisher_adapter import FakeTransport
 
@@ -56,6 +57,39 @@ class PublishCLITest(unittest.TestCase):
             browser.assert_not_called()
             self.assertFalse((root / "private-browser").exists())
             self.assertIn("GateBlocked", output.getvalue())
+
+    def test_first_publish_without_real_article_evidence_cannot_record_permit_or_publish(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plugin = root / "approved.php"
+            plugin.write_text("<?php /* Offline first-publication contract fixture. */")
+            languages = synthetic_bundle()
+            source = root / "incomplete-article-evidence.json"
+            source.write_text(json.dumps({"languages": languages}))
+            state_path = root / "queue.sqlite3"
+            store = StateStore(state_path)
+            revision, _ = store.enqueue({"event": "offline-first"}, {"fact": "synthetic fixture only"},
+                "Offline controlled candidate", [{"url": "https://example.invalid/fixture"}],
+                languages["ja"]["metadata"]["slug"], languages["ja"]["metadata"]["slug"][-10:])
+            client = FakeTransport()
+            client.site_url = "https://sggroup.jp"
+            client.status["implementation_sha256"] = hashlib.sha256(plugin.read_bytes()).hexdigest()
+            output = io.StringIO()
+            with patch("runtime.publish.WordPressTransport.from_environment", return_value=client), \
+                    patch("runtime.publish.StateStore.record_first_publication_permit", create=True) as permit, \
+                    patch("runtime.publish.Workflow.execute_first_publication", create=True) as publish, redirect_stdout(output):
+                code = main(["--route", "query", "--context", "offline-first", "--connection-revision", "offline-fixture",
+                    "--expected-user-id", "5", "--approved-plugin", str(plugin), "first-publish", "--state", str(state_path),
+                    "--revision-id", str(revision), "--bundle", str(source), "--preflight-plan", str(root / "plan.json"),
+                    "--authorization-receipt", str(root / "authorization.json"), "--capacity-receipt", str(root / "capacity.json"),
+                    "--browser-artifacts", str(root / "browser"), "--chromium", "/offline/unused-chromium"])
+            self.assertEqual(code, 2)
+            permit.assert_not_called()
+            publish.assert_not_called()
+            self.assertFalse(any(method == "POST" for method, _, _ in client.calls))
+            with store.connect() as connection:
+                self.assertEqual(connection.execute("SELECT value FROM settings WHERE key='paused'").fetchone()[0], "true")
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM gates").fetchone()[0], 0)
 
     def test_normalization_cannot_overwrite_an_existing_audited_source(self):
         with tempfile.TemporaryDirectory() as directory:

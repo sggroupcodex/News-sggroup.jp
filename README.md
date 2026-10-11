@@ -8,13 +8,13 @@ economics, military affairs, geopolitics, politics, strategic chokepoints,
 security, and shipping/sea lanes. Research, significance decisions, original
 writing, complete translation, and semantic reviews remain agent tasks.
 
-**Scheduling is paused.** On 2026-10-10, the existing WPVibe connection
-authenticated as Author user 5, but the dedicated publisher namespace was
-unavailable and its status endpoint returned `404 rest_no_route`. This account
-cannot install the integration and has not received `sgnews_publish`. The
-configured direct HTTP connection still returned 401; native WPVibe execution
-can reuse the existing connector without a second authorization secret. Actual
-saved-theme inspection and a controlled first publication remain pending.
+**Scheduling is paused.** On 2026-10-11, installed plugin 0.1.0 and the
+Author user 5 dedicated capability/dependencies were verified through its real
+status API. Reviewed plugin 0.1.1 adds managed-News schema and head corrections
+and still requires an administrator's independent upload. The configured direct
+HTTP connection returns 401; native WPVibe execution reuses the existing connector
+without a second authorization secret. Actual saved-theme inspection and a
+controlled first publication remain pending.
 
 The automation must keep its existing Author user 5 connection. Do not connect
 an administrator account or elevate its role. The site administrator performs
@@ -136,6 +136,23 @@ active-theme rendering through the authenticated scoped preview API, inspects
 that output in Chromium, then performs anonymous checks at the real public URLs.
 An unavailable saved preview blocks publication. Keep browser artifacts private.
 
+For the user's explicitly authorized first JA/EN pair, `preflight` creates an
+immutable private plan before any draft POST, records exact saved draft IDs,
+and measures both authenticated native-theme previews at all 28 required
+viewports. It does not publish or enable automation. Unknown writes require
+the server's actual operation journal; an incomplete plan is resumed using its
+same keys instead of blindly creating drafts again.
+
+`first-publish` adopts only that exact verified pair and still requires all eight
+original article audits, the four prepublication deployment gates, a current
+receipt for the user's publication instruction, and fresh measured API quota
+with recovery headroom. Its sole-revision permit binds current code, connection,
+prompt, event and staged source. It preserves a previously published side on
+partial resume and uses the normal fenced publication/reconciliation and public
+verification logic. It leaves the hourly pause and all production gates intact.
+Only actual successful public JA/EN checks can establish the remaining language
+and complete-run capacity gates before the hourly automation is enabled.
+
 The bridge requests complete fields and an 8 MiB response allowance. The real
 English fragment contains 137,170 characters, already exceeding WPVibe's
 default 50,000-character response limit. Truncated, malformed or error responses
@@ -145,10 +162,12 @@ accepted or returned the complete payload. A lost write response retains its
 operation key and requires server-journal reconciliation before retrying.
 
 Verify API capacity before enabling production. The currently observed free
-plan allows 100 calls per rolling 24 hours; the existing flow needs roughly
-50–54 calls for one new bilingual pair, including canonicalization, before
-error recovery or extra readiness checks. This estimate is not a publishing
-limit or a capacity certification. Budget actual remaining calls, queued work
+plan allows 100 calls per rolling 24 hours. Budget live canonicalization and
+private preflight separately; controlled first publication reuses their saved
+stages and requires at least 30 remaining calls plus 10 recovery calls immediately
+before executing a fresh pair. The estimate drops for verified partial resumes.
+These estimates are neither publishing limits nor capacity certification.
+Budget actual remaining calls, queued work
 and recovery headroom, and keep publication paused when capacity is insufficient.
 An unchanged or non-actionable monitoring run should make no WordPress calls
 and send no routine status notification.
@@ -193,3 +212,10 @@ See `wordpress/plugin-review.md` for the Japanese installation review, and
 recovery procedure. The PHP lifecycle harness uses WordPress API doubles to
 exercise ordering and injected failures; it does not establish live database,
 theme, language-controller or AIOSEO compatibility.
+
+Plugin 0.1.1 additionally scopes NewsArticle/SG Group Organization/free-access
+schema and own canonical/reciprocal JA-EN/x-default head corrections to intact
+owned single managed News posts and their authenticated previews. It modifies
+AIOSEO's existing single Article graph and adds no extra JSON-LD script.
+Ordinary existing news and archives remain unchanged. Actual saved-preview and
+published-page head checks are mandatory even after the offline regressions pass.

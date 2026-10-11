@@ -130,6 +130,8 @@
     const common = new Set(["--route", "--context", "--connection-revision", "--approved-plugin", "--publisher-code-sha256", "--publisher-policy-version"]);
     const commandFlags = {
       authenticate: new Set(), diagnose: new Set(), canonicalize: new Set(["--language", "--slug", "--input", "--output"]),
+      preflight: new Set(["--bundle", "--plan", "--browser-artifacts", "--chromium"]),
+      "first-publish": new Set(["--state", "--revision-id", "--bundle", "--preflight-plan", "--authorization-receipt", "--capacity-receipt", "--browser-artifacts", "--chromium"]),
       execute: new Set(["--state", "--revision-id", "--bundle", "--browser-artifacts", "--chromium"])
     };
     let command = null; const seen = new Set();

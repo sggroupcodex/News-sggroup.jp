@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "purpose": "independent_source_and_offline_regression_review",
+  "reviewer": "connector_security_review",
+  "checked_at": "2026-10-11T04:09:39.493037+00:00",
+  "execution_mode": "offline",
+  "production_ready": false,
+  "deployment_verified": false,
+  "live_wordpress_calls": 0,
+  "files": {
+    "wordpress/sggroup-news-publisher.php": "fd8ade39ee4b22352036bc3a6fc85bc86dbca580d036a1e2acb0ac4db5cf9ce8",
+    "wordpress/test-lifecycle.php": "24922cbda895ab80e3bbf139cf060ade6d5a21df4c8046b446267831a83b967d",
+    "wordpress/test-admin-setup.php": "ba2327f005cce29cc7dcfd5d37697715877cfa1d431d586a1bd77ff966911475",
+    "wordpress/test-sanitizer.php": "6a707229c5da8526835c8131b2ac7ff16ea85987bb03dfb119853e3a5f100a60",
+    "runtime/state.py": "267f4baee6922a3a7e42fa5c0e76b67f8f3f569b6c1bf1c276424d2a00bfcb24",
+    "runtime/workflow.py": "7dc3b0646ca1713afa8d015f3d3b51914760d42140d26f22258212f5d08831c4",
+    "runtime/tests/test_first_publication.py": "93c97b1ad0d047ee2e0234ba298c7a15e65e38b9d114a2dad19594e601876fb9"
+  },
+  "prior_plugin_source_sha256": "f581ab53e200ba3580f5395587c8cbac9d7a76566dacfce4205208720c507fb4",
+  "methods": [
+    {
+      "method": "complete source diff against actual 0.1.0 ZIP PHP source",
+      "result": "changes confined to version header, two private head state fields, two wp_head hooks and guarded schema/head response functions"
+    },
+    {
+      "method": "independent inspection of newsHeadContext/freeSchema/beginNewsHead/endNewsHead",
+      "result": "no remaining blocking source issue found in reviewed scope"
+    },
+    {
+      "command": "docker run --rm --network none -v /workspace/sggroup-news-automation:/app:ro -w /app php:8.3-cli php wordpress/test-lifecycle.php",
+      "tests": 112,
+      "failures": [],
+      "scope": "WordPress API doubles and real PHP DOM; includes 42 new head/schema checks and 70 prior lifecycle checks"
+    },
+    {
+      "command": "docker run --rm --network none -v /workspace/sggroup-news-automation:/app:ro -w /app php:8.3-cli php wordpress/test-admin-setup.php",
+      "tests": 99,
+      "failures": [],
+      "scope": "offline administrator GUI WordPress API doubles"
+    },
+    {
+      "command": "docker run --rm --network none -v /workspace/sggroup-news-automation:/app:ro -w /app php:8.3-cli php wordpress/test-sanitizer.php",
+      "tests": 45,
+      "failures": [],
+      "scope": "actual PHP DOM/CSS sanitizer"
+    },
+    {
+      "command": "docker run --rm --network none -v /workspace/sggroup-news-automation:/app:ro -w /app php:8.3-cli php -l wordpress/sggroup-news-publisher.php",
+      "result": "No syntax errors detected"
+    },
+    {
+      "command": "python -m unittest runtime.tests.test_first_publication runtime.tests.test_workflow runtime.tests.test_publisher_adapter runtime.tests.test_publish_cli runtime.tests.test_preflight_cli",
+      "tests": 94,
+      "failures": [],
+      "scope": "offline Python controlled-first, normal workflow, adapter, CLI and preflight regression tests"
+    }
+  ],
+  "observations": [
+    "Only an intact owned Author5 managed News post in a single-post context is eligible. Anonymous drafts, ordinary posts, wrong owner/category/source and archive contexts receive no head or schema correction.",
+    "An owned draft stage additionally requires actual current user5 with sgnews_publish. Public canonical posts require publish status. The exact configured site remains https://sggroup.jp.",
+    "The existing AIOSEO graph is modified in place only when exactly one Article, BlogPosting or NewsArticle node exists. It becomes NewsArticle with free access, approved headline/language/URL and SG Group Organization author/publisher; zero or multiple article nodes remain unchanged.",
+    "The wp_head output buffer removes canonical and ja/en/x-default alternate link tokens and emits one own canonical and reciprocal shared-slug links. Comments and raw script/style/title/textarea content are preserved. Unclosed raw text/comments, changed post context and mismatched nested buffers cancel correction.",
+    "The source diff introduces no capability grant, authentication change, new remote route, source sanitizer change, publication lifecycle change, database write, cron or outbound HTTP action.",
+    "Controlled-first execution is internally bound to one revision, event, baseline date, full JA/EN payload, current Python/connector code and Author5 runtime. It consumes fresh action/quota receipts, requires four real prepublication gates and all eight article checks, reuses freshly verified known stages and preserves durable publication/reconciliation/public QA.",
+    "Partial first-pair recovery verifies the already-public canonical source and identity before publishing the missing peer. Ordinary execute/run_pending continue to require all six gates and an unpaused runtime; controlled-first success does not change pause or promote postpublication gates."
+  ],
+  "blocking_findings": [],
+  "limitations": [
+    "Offline tests do not verify the installed WordPress, MySQL, active theme or installed AIOSEO implementation. Production frontend HTML/schema, actual metadata roundtrip and public URL QA remain required.",
+    "This review did not install 0.1.1, grant any role/capability, send WordPress requests, publish an article or enable an hourly schedule.",
+    "The installed source must match this exact PHP SHA before using its runtime proofs; earlier 0.1.0 source approval does not certify the new code.",
+    "Structured operator receipts are not cryptographic execution attestation; private files and exact digests bind the recorded evidence to the reviewed execution."
+  ]
+}
